@@ -46,6 +46,7 @@ esp-wifi = { version = "0.7.1", features = [
     "embassy-net", "async",
     "log",
 ]}
+rust-mqtt = { version = "0.3.0", default-features = false }
 
 
 toml-cfg = "0.2.0"
