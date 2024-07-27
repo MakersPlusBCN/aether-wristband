@@ -6,7 +6,8 @@ use core::str::FromStr;
 
 use esp_backtrace as _;
 use esp_hal::{
-    clock::ClockControl, system::SystemControl,
+    system::SystemControl,
+    clock::{ClockControl, CpuClock},
     peripherals::Peripherals,
     gpio::Io,
     rmt::Rmt,
@@ -56,8 +57,8 @@ async fn main(spawner: Spawner) -> ! {
 
     let peripherals = Peripherals::take();
     let system = SystemControl::new(peripherals.SYSTEM);
+    let clocks = ClockControl::configure(system.clock_control, CpuClock::Clock160MHz).freeze();
 
-    let clocks = ClockControl::max(system.clock_control).freeze();
 
     // Network setup start
     let timer = esp_hal::timer::PeriodicTimer::new(
