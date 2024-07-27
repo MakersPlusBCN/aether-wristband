@@ -10,7 +10,6 @@ use esp_hal::{
     clock::{ClockControl, CpuClock},
     peripherals::Peripherals,
     gpio::Io,
-    rmt::Rmt,
     timer::{ErasedTimer, OneShotTimer},
     prelude::*,
 };
