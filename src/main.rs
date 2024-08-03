@@ -2,7 +2,7 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
-use core::{cell::{RefCell, RefMut}, mem::MaybeUninit, str::FromStr};
+use core::{mem::MaybeUninit, str::FromStr};
 
 use esp_backtrace as _;
 use esp_hal::{
@@ -10,8 +10,8 @@ use esp_hal::{
     clock::{ClockControl, CpuClock},
     peripherals::Peripherals,
     i2c::I2C,
-    gpio::Io,
-    timer::{ErasedTimer, OneShotTimer},
+    gpio::{Io, Output, Level},
+    timer::OneShotTimer,
     rng::Rng,
     prelude::*,
 };
