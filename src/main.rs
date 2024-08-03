@@ -250,12 +250,22 @@ async fn main(spawner: Spawner) -> ! {
             }
             log::info!("Connected to broker!");
 
-            // Main loop that sends data to the broker
+            // Main loop: reading the sensor and sending movement detection data to the broker
+
+            // moduli to keep a healthy load for the MQTT link
+            const DETECTION_REPORT_FREQ: Duration = Duration::from_hz(8);
+            const MOD_DETECTION: u32 = (DETECTION_REPORT_FREQ.as_ticks() / IMU_SAMPLE_PERIOD.as_ticks()) as u32;
+            const MQTT_PING_PERIOD: Duration = Duration::from_secs(4);
+            const MOD_MQTT_PING: u32 = (MQTT_PING_PERIOD.as_ticks() / IMU_SAMPLE_PERIOD.as_ticks()) as u32;
+            log::info!("Mod_det {MOD_DETECTION}, Mod_mq {MOD_MQTT_PING}");
             let mut ticker = Ticker::every(IMU_SAMPLE_PERIOD);
-            let mut id: i32 = 0;
+            let mut id: u32 = 0;
             'sense: loop {
-                id += 1;
                 ticker.next().await;
+                id += 1;
+                let should_send_sample = id % MOD_DETECTION == 0;
+                // Adding 1 avoids both events coinciding, which would be redundant.
+                let should_send_ping = (id + 1) % MOD_MQTT_PING == 0;
 
                 let now = Instant::now();
                 flag.set_high();
@@ -267,7 +277,7 @@ async fn main(spawner: Spawner) -> ! {
                         tracker.update(now, acc, gyr, mag);
                         let new_direction = analysis.add_measurement(tracker.linear_accel);
                         flag.set_low();
-                        if id % 40 == 0 {
+                        if should_send_sample {
                             if let Some(dir) = new_direction {
                                 log::info!("{} {:?}", id, dir);
                                 let payload: [u8; 1] = [0x30 + dir.as_payload()];
@@ -290,6 +300,15 @@ async fn main(spawner: Spawner) -> ! {
                     Err(e) => {
                         log::error!("Reading IMU {e:?}");
                         continue 'sense;
+                    }
+                }
+
+                if should_send_ping {
+                    if let Err(result) = client.send_ping().await {
+                        if result != ReasonCode::Success {
+                            log::error!("Could not send ping because {result}; Restarting connection!");
+                            break 'mqtt;
+                        }
                     }
                 }
             }
