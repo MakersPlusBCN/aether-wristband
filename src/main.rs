@@ -161,6 +161,7 @@ async fn main(spawner: Spawner) -> ! {
     let _gyr_cal = imu.gyr_calibrate(100).await.is_ok();
 
     const IMU_SAMPLE_PERIOD: Duration = Duration::from_hz(200);
+    const EVENT_TOPIC: &str = const_format::formatcp!("{}/event", FIRMWARE_CONFIG.mqtt_id);
     let acc_misalignment = FusionMatrix::identity();
     let acc_offset = FusionVector::zero();
     let acc_sensitivity = FusionVector::ones();
@@ -283,7 +284,7 @@ async fn main(spawner: Spawner) -> ! {
                                 let payload: [u8; 1] = [0x30 + dir.as_payload()];
                                 if let Err(result) = client
                                     .send_message(
-                                        "imu0/event",
+                                        EVENT_TOPIC,
                                         &payload,
                                         QualityOfService::QoS0,
                                         false,

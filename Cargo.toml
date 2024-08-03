@@ -54,6 +54,7 @@ icm20948-async = { git = "https://github.com/peterkrull/icm20948-async" }
 circular-buffer = { version = "0.1", default-features = false }
 micromath = "2.1.0"
 imu-fusion = "0.2.4"
+const_format = "0.2.32"
 
 [profile.dev]
 # Rust debug is too slow.
