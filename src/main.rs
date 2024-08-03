@@ -86,6 +86,9 @@ async fn main(spawner: Spawner) -> ! {
     let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
     let mut rng = Rng::new(peripherals.RNG);
 
+    let mut flag = Output::new(io.pins.gpio5, Level::Low);
+    flag.set_low();
+
     // Network setup start
     let seed = ((rng.random() as u64) << 32) | (rng.random() as u64);
     let timer = esp_hal::timer::PeriodicTimer::new(
@@ -255,6 +258,7 @@ async fn main(spawner: Spawner) -> ! {
                 ticker.next().await;
 
                 let now = Instant::now();
+                flag.set_high();
                 match imu.read_9dof().await {
                     Ok(meas) => {
                         let acc = FusionVector::new(meas.acc.x, meas.acc.y, meas.acc.z);
@@ -263,6 +267,7 @@ async fn main(spawner: Spawner) -> ! {
                         //log::info!("({id}): {0:.3}, {1:.3}, {2:.3}", mag.x, mag.y, mag.z);
                         tracker.update(now, acc, gyr, mag);
                         let new_direction = analysis.add_measurement(tracker.linear_accel);
+                        flag.set_low();
                         if id % 50 == 0 {
                             if let Some(dir) = new_direction {
                                 log::info!("{} {:?}", id, dir);
