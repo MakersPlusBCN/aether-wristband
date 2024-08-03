@@ -22,6 +22,14 @@ impl MovementDirection {
             MovementDirection::Diagonal => 2,
         }
     }
+
+    pub fn as_char(&self) -> char {
+        match *self {
+            MovementDirection::Vertical => 'V',
+            MovementDirection::Horizontal => 'H',
+            MovementDirection::Diagonal => 'D',
+        }
+    }
 }
 
 struct Smoothing {

@@ -19,6 +19,7 @@ use esp_hal::{
 use embassy_executor::Spawner;
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 
+use esp_println::println;
 use static_cell::make_static;
 
 extern crate alloc;
@@ -280,8 +281,7 @@ async fn main(spawner: Spawner) -> ! {
                         flag.set_low();
                         if should_send_sample {
                             if let Some(dir) = new_direction {
-                                log::info!("{} {:?}", id, dir);
-                                let payload: [u8; 1] = [0x30 + dir.as_payload()];
+                                let payload: [u8; 1] = [0x30 + dir.as_digit()];
                                 if let Err(result) = client
                                     .send_message(
                                         EVENT_TOPIC,
@@ -295,6 +295,7 @@ async fn main(spawner: Spawner) -> ! {
                                         break 'mqtt;
                                     }
                                 }
+                                println!("{:02} {}", (id % 100), dir.as_char());
                             }
                         }
                     },
