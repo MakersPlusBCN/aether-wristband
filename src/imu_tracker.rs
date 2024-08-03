@@ -79,19 +79,22 @@ impl ImuTracker {
 
 }
 
-fn conjugate(q: &FusionQuaternion) -> FusionQuaternion {
-    FusionQuaternion {
-        w: q.w, x: -q.x, y: -q.y, z: -q.z
-    }
-}
+/* The rotate() function below implements this operation
+   using the minimal amount of multiplications.
 
-fn rotate2(vec: FusionVector, q: FusionQuaternion) -> FusionVector {
+fn bruteforce_rotate(vec: FusionVector, q: FusionQuaternion) -> FusionVector {
     let qn = q.normalize();
     let rot_q = (qn * vec) * conjugate(&qn);
     FusionVector {
         x: rot_q.x, y: rot_q.y, z: rot_q.z
     }
 }
+fn conjugate(q: &FusionQuaternion) -> FusionQuaternion {
+    FusionQuaternion {
+        w: q.w, x: -q.x, y: -q.y, z: -q.z
+    }
+}
+*/
 
 fn rotate(v: FusionVector, q: FusionQuaternion) -> FusionVector {
 
