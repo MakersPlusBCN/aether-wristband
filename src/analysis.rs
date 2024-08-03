@@ -14,11 +14,20 @@ pub enum MovementDirection {
 }
 
 impl MovementDirection {
+
     pub fn as_payload(&self) -> u8 {
         match *self {
             MovementDirection::Vertical => 0,
             MovementDirection::Horizontal => 1,
             MovementDirection::Diagonal => 2,
+        }
+    }
+
+    pub fn as_char(&self) -> char {
+        match *self {
+            MovementDirection::Vertical => 'V',
+            MovementDirection::Horizontal => 'H',
+            MovementDirection::Diagonal => 'D',
         }
     }
 }
