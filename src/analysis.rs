@@ -261,11 +261,3 @@ fn test_simple_quantile_movement_computation() {
         assert_eq!(movement, (0.0, 0.0));
     }
 }
-
-fn no_invalid_float(f: f32) -> f32 {
-    if f.is_normal() {
-        f
-    } else {
-        0.0
-    }
-}
