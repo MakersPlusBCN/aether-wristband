@@ -165,7 +165,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut tracker = ImuTracker::new(IMU_SAMPLE_PERIOD, Instant::now(), 1000.0f32,
                                       acc_misalignment, acc_sensitivity, acc_offset, gyr_offset);
 
-    //let mut analysis = Analysis::default();
+    let mut analysis = Analysis::default();
 
     // Init network stack
     let stack = &*make_static!(Stack::new(
@@ -178,42 +178,42 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(connection(controller)).ok();
     spawner.spawn(net_task(stack)).ok();
 
+    let remote_endpoint = (
+        Ipv4Address::from_str(FIRMWARE_CONFIG.mqtt_host).unwrap(),
+        FIRMWARE_CONFIG.mqtt_port.parse::<u16>().unwrap()
+    );
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
 
     // Outer loop that maintains WiFi connectivity
     loop {
         log::info!("Bringing network link up...");
-        loop {
-            if stack.is_link_up() {
-                break;
-            }
+        while !stack.is_link_up() {
             Timer::after(Duration::from_millis(500)).await;
         }
 
         log::info!("Waiting to get IP address...");
-        loop {
+        'ip: loop {
             if let Some(config) = stack.config_v4() {
                 log::info!("Got IP: {}", config.address);
-                break;
+                break 'ip;
             }
             Timer::after(Duration::from_millis(500)).await;
         }
 
         // Inner loop that maintains connectivity to the MQTT broker
-        loop {
+        'mqtt: loop {
             let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
             socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
-            let remote_endpoint = (Ipv4Address::from_str(FIRMWARE_CONFIG.mqtt_host).unwrap(), FIRMWARE_CONFIG.mqtt_port.parse::<u16>().unwrap());
 
-            log::info!("connecting...");
+
+            log::info!("Connecting...");
             Timer::after(Duration::from_millis(500)).await;
-            let r = socket.connect(remote_endpoint).await;
-            if let Err(e) = r {
-                log::info!("connect error: {:?}", e);
-                continue;
+            if let Err(e) = socket.connect(remote_endpoint).await {
+                log::error!("connecting: {:?}", e);
+                continue 'mqtt;
             }
-            log::info!("connected!");
+            log::info!("Connected!");
 
             let mut config = ClientConfig::new(
                 rust_mqtt::client::client_config::MqttVersion::MQTTv5,
@@ -234,40 +234,45 @@ async fn main(spawner: Spawner) -> ! {
                 80,
                 config,
             );
-            while let Err(result) = client.connect_to_broker().await {
+            log::info!("Attempting broker connection...");
+            'broker: while let Err(result) = client.connect_to_broker().await {
                 if result == ReasonCode::Success {
                     log::info!("Connected!");
-                    break;
+                    break 'broker;
                 }
                 else {
                     log::error!("Could not contact broker because {result}")
                 }
                 Timer::after(Duration::from_millis(500)).await;
-                log::info!("Attempting again...");
             }
+            log::info!("Connected to broker!");
 
             // Main loop that sends data to the broker
-            let mut ticker = Ticker::every(Duration::from_secs(1));
+            let mut ticker = Ticker::every(IMU_SAMPLE_PERIOD);
             let mut id: i32 = 0;
-            loop {
+            'sense: loop {
                 id += 1;
+                ticker.next().await;
 
-                if let Ok(meas) = imu.read_9dof().await {
-                    let now = Instant::now();
-                    let acc = FusionVector::new(meas.acc.x, meas.acc.y, meas.acc.z);
-                    let gyr = FusionVector::new(meas.gyr.x, meas.gyr.y, meas.gyr.z);
-                    let mag = FusionVector::new(meas.mag.x, meas.mag.y, meas.mag.z);
-                    //log::info!("({i}): {0:.3}, {1:.3}, {2:.3}", mag.x, mag.y, mag.z);
-                    tracker.update(now, acc, gyr, mag);
-                    /*
-                    let new_direction = analysis.add_measurement(tracker.linear_accel);
-                    if id % 50 == 0 {
-                        if let Some(dir) = new_direction {
-                            log::info!("{} {:?}", id, dir);
-                            //tx.send(vec![0x30 + dir.as_payload()])?;
+                let now = Instant::now();
+                match imu.read_9dof().await {
+                    Ok(meas) => {
+                        let acc = FusionVector::new(meas.acc.x, meas.acc.y, meas.acc.z);
+                        let gyr = FusionVector::new(meas.gyr.x, meas.gyr.y, meas.gyr.z);
+                        let mag = FusionVector::new(meas.mag.x, meas.mag.y, meas.mag.z);
+                        //log::info!("({id}): {0:.3}, {1:.3}, {2:.3}", mag.x, mag.y, mag.z);
+                        tracker.update(now, acc, gyr, mag);
+                        let new_direction = analysis.add_measurement(tracker.linear_accel);
+                        if id % 50 == 0 {
+                            if let Some(dir) = new_direction {
+                                log::info!("{} {:?}", id, dir);
+                            }
                         }
+                    },
+                    Err(e) => {
+                        log::error!("Reading IMU {e:?}");
+                        continue 'sense;
                     }
-                    */
                 }
 
                 if let Err(result) = client
@@ -280,10 +285,9 @@ async fn main(spawner: Spawner) -> ! {
                     .await {
                     if result != ReasonCode::Success {
                         log::error!("Could not publish because {result}; Restarting connection!");
-                        break;
+                        break 'mqtt;
                     }
                 }
-                ticker.next().await;
             }
         }
     }
