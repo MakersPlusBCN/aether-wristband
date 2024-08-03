@@ -8,9 +8,13 @@ use esp_backtrace as _;
 use esp_hal::{
     system::SystemControl,
     clock::{ClockControl, CpuClock},
-    peripherals::Peripherals,
-    i2c::I2C,
-    gpio::{Io, Output, Level},
+    peripherals::{Peripherals, SPI2},
+    spi::{
+        master::Spi,
+        SpiMode,
+        FullDuplexMode
+    },
+    gpio::{Io, Output, Level, any_pin::AnyPin},
     timer::OneShotTimer,
     rng::Rng,
     prelude::*,
@@ -20,7 +24,7 @@ use embassy_executor::Spawner;
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 
 use esp_println::println;
-use static_cell::make_static;
+use static_cell::{make_static, StaticCell};
 
 extern crate alloc;
 
@@ -37,8 +41,18 @@ use rust_mqtt::{
     utils::rng_generator::CountingRng,
 };
 
+use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
+use embassy_sync::{
+    blocking_mutex::raw::NoopRawMutex,
+    mutex::Mutex,
+};
 use icm20948_async::{AccRange, AccDlp, AccUnit, GyrDlp, GyrRange, GyrUnit, IcmError, Icm20948};
 use imu_fusion::{FusionMatrix, FusionVector};
+
+// This gives us a mutable reference to an SPI object with a static lifetime
+static SPI_BUS: StaticCell<Mutex<NoopRawMutex, Spi<SPI2, FullDuplexMode>>> = StaticCell::new();
+
+
 
 mod analysis;
 mod imu_tracker;
@@ -122,18 +136,21 @@ async fn main(spawner: Spawner) -> ! {
     // IMU bus start
     let sclk = io.pins.gpio8;
     let mosi = io.pins.gpio10;  // SDA on IMU board
-    //let miso = io.pins.gpio7;    // SDO on IMU board
-    //let cs = io.pins.gpio5;
+    let miso = io.pins.gpio7;    // SDO on IMU board
+    let cs = io.pins.gpio4;
 
-    // Create and await IMU object
-    let i2c0 = I2C::new_async(
-        peripherals.I2C0,
-        mosi,
-        sclk,
-        400.kHz(),
-        &clocks,
-    );
-    let imu_configured = Icm20948::new_i2c(i2c0, Delay)
+    let mut spi = Spi::new(peripherals.SPI2, 2.MHz(), SpiMode::Mode0, &clocks)
+        .with_pins(Some(sclk), Some(mosi), Some(miso), Option::<AnyPin>::None);
+
+    // Initialize the StaticCell with the configured SPI peripheral
+    let spi_bus = SPI_BUS.init(Mutex::new(spi));
+
+    // Set cs pin as output, and make new SpiDevice
+    let mut cs_pin = Output::new(cs, Level::Low);
+    let spi_dev = SpiDevice::new(spi_bus, cs_pin);
+
+    // Create imu object
+    let imu_configured = Icm20948::new_spi(spi_dev, Delay)
     // Configure accelerometer
     .acc_range(AccRange::Gs8)
     .acc_dlp(AccDlp::Hz111)
@@ -141,9 +158,7 @@ async fn main(spawner: Spawner) -> ! {
     // Configure gyroscope
     .gyr_range(GyrRange::Dps1000)
     .gyr_dlp(GyrDlp::Hz120)
-    .gyr_unit(GyrUnit::Dps)
-    // Final initialization
-    .set_address(0x69);
+    .gyr_unit(GyrUnit::Dps);
     let imu_result = imu_configured.initialize_9dof().await;
     //spawner.must_spawn(imu_reader(i2c, out_imu_reading, sample_time))
     // Unpack IMU result safely and print error if necessary
