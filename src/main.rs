@@ -36,13 +36,14 @@ use rust_mqtt::{
     },
     utils::rng_generator::CountingRng,
 };
-use icm20948_async::{AccRange, AccDlp, AccUnit, GyrDlp, GyrRange, GyrUnit, IcmError, Icm20948};
 
+use icm20948_async::{AccRange, AccDlp, AccUnit, GyrDlp, GyrRange, GyrUnit, IcmError, Icm20948};
 use imu_fusion::{FusionMatrix, FusionVector};
+
+mod analysis;
 mod imu_tracker;
 use imu_tracker::ImuTracker;
-mod analysis;
-use analysis::{Analysis, MovementDirection};
+use analysis::Analysis;
 
 #[global_allocator]
 static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
