@@ -14,7 +14,8 @@ pub enum MovementDirection {
 }
 
 impl MovementDirection {
-    pub fn as_payload(&self) -> u8 {
+
+    pub fn as_digit(&self) -> u8 {
         match *self {
             MovementDirection::Vertical => 0,
             MovementDirection::Horizontal => 1,
