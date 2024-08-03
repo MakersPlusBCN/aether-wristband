@@ -263,33 +263,32 @@ async fn main(spawner: Spawner) -> ! {
                         let acc = FusionVector::new(meas.acc.x, meas.acc.y, meas.acc.z);
                         let gyr = FusionVector::new(meas.gyr.x, meas.gyr.y, meas.gyr.z);
                         let mag = FusionVector::new(meas.mag.x, meas.mag.y, meas.mag.z);
-                        //log::info!("({id}): {0:.3}, {1:.3}, {2:.3}", mag.x, mag.y, mag.z);
                         tracker.update(now, acc, gyr, mag);
                         let new_direction = analysis.add_measurement(tracker.linear_accel);
                         flag.set_low();
-                        if id % 50 == 0 {
+                        if id % 40 == 0 {
                             if let Some(dir) = new_direction {
                                 log::info!("{} {:?}", id, dir);
+                                let payload: [u8; 1] = [0x30 + dir.as_payload()];
+                                if let Err(result) = client
+                                    .send_message(
+                                        "imu0/event",
+                                        &payload,
+                                        QualityOfService::QoS0,
+                                        false,
+                                    )
+                                    .await {
+                                    if result != ReasonCode::Success {
+                                        log::error!("Could not publish because {result}; Restarting connection!");
+                                        break 'mqtt;
+                                    }
+                                }
                             }
                         }
                     },
                     Err(e) => {
                         log::error!("Reading IMU {e:?}");
                         continue 'sense;
-                    }
-                }
-
-                if let Err(result) = client
-                    .send_message(
-                        "imu0/event",
-                        &id.to_be_bytes(),
-                        QualityOfService::QoS0,
-                        false,
-                    )
-                    .await {
-                    if result != ReasonCode::Success {
-                        log::error!("Could not publish because {result}; Restarting connection!");
-                        break 'mqtt;
                     }
                 }
             }
