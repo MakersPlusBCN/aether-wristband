@@ -19,6 +19,7 @@ use esp_hal::{
 use embassy_executor::Spawner;
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 
+use defmt::{info, error, warn};
 use esp_println::println;
 use static_cell::make_static;
 
@@ -78,7 +79,6 @@ pub struct FirmwareConfig {
 
 #[main]
 async fn main(spawner: Spawner) -> ! {
-    esp_println::logger::init_logger_from_env();
     init_heap();
 
     let peripherals = Peripherals::take();
@@ -151,14 +151,14 @@ async fn main(spawner: Spawner) -> ! {
         Ok(imu) => imu,
         Err(error) => {
             match error {
-                IcmError::BusError(_)   => log::error!("IMU_READER : IMU encountered a communication bus error"),
-                IcmError::ImuSetupError => log::error!("IMU_READER : IMU encountered an error during setup"),
-                IcmError::MagSetupError => log::error!("IMU_READER : IMU encountered an error during mag setup")
+                IcmError::BusError(_)   => error!("IMU_READER : IMU encountered a communication bus error"),
+                IcmError::ImuSetupError => error!("IMU_READER : IMU encountered an error during setup"),
+                IcmError::MagSetupError => error!("IMU_READER : IMU encountered an error during mag setup")
             } panic!("Could not init IMU!");
         }
     };
     // Calibrate gyroscope offsets using 100 samples
-    log::info!("IMU_READER : Reading gyroscopes, keep still");
+    info!("IMU_READER : Reading gyroscopes, keep still");
     let _gyr_cal = imu.gyr_calibrate(100).await.is_ok();
 
     const IMU_SAMPLE_PERIOD: Duration = Duration::from_hz(200);
@@ -192,15 +192,15 @@ async fn main(spawner: Spawner) -> ! {
 
     // Outer loop that maintains WiFi connectivity
     loop {
-        log::info!("Bringing network link up...");
+        info!("Bringing network link up...");
         while !stack.is_link_up() {
             Timer::after(Duration::from_millis(500)).await;
         }
 
-        log::info!("Waiting to get IP address...");
+        info!("Waiting to get IP address...");
         'ip: loop {
             if let Some(config) = stack.config_v4() {
-                log::info!("Got IP: {}", config.address);
+                info!("Got IP: {}", config.address);
                 break 'ip;
             }
             Timer::after(Duration::from_millis(500)).await;
@@ -212,13 +212,13 @@ async fn main(spawner: Spawner) -> ! {
             socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
 
 
-            log::info!("Connecting...");
+            info!("Connecting...");
             Timer::after(Duration::from_millis(500)).await;
             if let Err(e) = socket.connect(remote_endpoint).await {
-                log::error!("connecting: {:?}", e);
+                error!("connecting: {:?}", e);
                 continue 'mqtt;
             }
-            log::info!("Connected!");
+            info!("Connected!");
 
             let mut config = ClientConfig::new(
                 rust_mqtt::client::client_config::MqttVersion::MQTTv5,
@@ -239,18 +239,18 @@ async fn main(spawner: Spawner) -> ! {
                 80,
                 config,
             );
-            log::info!("Attempting broker connection...");
+            info!("Attempting broker connection...");
             'broker: while let Err(result) = client.connect_to_broker().await {
                 if result == ReasonCode::Success {
-                    log::info!("Connected!");
+                    info!("Connected!");
                     break 'broker;
                 }
                 else {
-                    log::error!("Could not contact broker because {result}")
+                    error!("Could not contact broker because {}", result)
                 }
                 Timer::after(Duration::from_millis(500)).await;
             }
-            log::info!("Connected to broker!");
+            info!("Connected to broker!");
 
             // Main loop: reading the sensor and sending movement detection data to the broker
 
@@ -259,7 +259,7 @@ async fn main(spawner: Spawner) -> ! {
             const MOD_DETECTION: u32 = (DETECTION_REPORT_FREQ.as_ticks() / IMU_SAMPLE_PERIOD.as_ticks()) as u32;
             const MQTT_PING_PERIOD: Duration = Duration::from_secs(4);
             const MOD_MQTT_PING: u32 = (MQTT_PING_PERIOD.as_ticks() / IMU_SAMPLE_PERIOD.as_ticks()) as u32;
-            log::info!("Mod_det {MOD_DETECTION}, Mod_mq {MOD_MQTT_PING}");
+            info!("Mod_det {}, Mod_mq {}", MOD_DETECTION, MOD_MQTT_PING);
             let mut ticker = Ticker::every(IMU_SAMPLE_PERIOD);
             let mut id: u32 = 0;
             'sense: loop {
@@ -291,7 +291,7 @@ async fn main(spawner: Spawner) -> ! {
                                     )
                                     .await {
                                     if result != ReasonCode::Success {
-                                        log::error!("Could not publish because {result}; Restarting connection!");
+                                        error!("Could not publish because {}; Restarting connection!", result);
                                         break 'mqtt;
                                     }
                                 }
@@ -300,7 +300,7 @@ async fn main(spawner: Spawner) -> ! {
                         }
                     },
                     Err(e) => {
-                        log::error!("Reading IMU {e:?}");
+                        error!("Reading IMU {:?}", e);
                         continue 'sense;
                     }
                 }
@@ -308,7 +308,7 @@ async fn main(spawner: Spawner) -> ! {
                 if should_send_ping {
                     if let Err(result) = client.send_ping().await {
                         if result != ReasonCode::Success {
-                            log::error!("Could not send ping because {result}; Restarting connection!");
+                            error!("Could not send ping because {}; Restarting connection!", result);
                             break 'mqtt;
                         }
                     }
@@ -320,8 +320,8 @@ async fn main(spawner: Spawner) -> ! {
 
 #[embassy_executor::task]
 async fn connection(mut controller: WifiController<'static>) {
-    log::info!("start connection task");
-    log::info!("Device capabilities: {:?}", controller.get_capabilities());
+    info!("start connection task");
+    info!("Device capabilities: {:?}", controller.get_capabilities());
     loop {
         if esp_wifi::wifi::get_wifi_state() == WifiState::StaConnected {
             // wait until we're no longer connected
@@ -336,16 +336,16 @@ async fn connection(mut controller: WifiController<'static>) {
                 ..Default::default()
             });
             controller.set_configuration(&client_config).unwrap();
-            log::info!("Starting wifi");
+            info!("Starting wifi");
             controller.start().await.unwrap();
-            log::info!("Wifi started!");
+            info!("Wifi started!");
         }
-        log::info!("About to connect...");
+        info!("About to connect...");
 
         match controller.connect().await {
-            Ok(_) => log::info!("Wifi connected!"),
+            Ok(_) => info!("Wifi connected!"),
             Err(e) => {
-                log::error!("Failed to connect to wifi: {e:?}");
+                error!("Failed to connect to wifi: {:?}", e);
                 Timer::after(Duration::from_millis(5000)).await
             }
         }
