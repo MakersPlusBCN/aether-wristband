@@ -23,17 +23,17 @@ heapless = { version = "0.8.0", default-features = false }
 static_cell = { version = "2.1.0", features = ["nightly"] }
 
 esp-hal-embassy = { version = "0.2.0", features = ["esp32s3", "defmt", "integrated-timers"] }
-embassy-executor    = { version = "0.5.0", features = ["nightly"] }
-embassy-embedded-hal = "0.1.0"
-embassy-futures     = "0.1.1"
-embassy-sync        = "0.6.0"
-embassy-time        = "0.3.1"
-embassy-time-driver = { version = "0.1.0" }
-embedded-hal        = "1.0.0"
-embedded-hal-async  = "1.0.0"
-embedded-hal-bus    = "0.2.0"
-embedded-io         = { version = "0.6.1" }
-embedded-io-async   = "0.6.1"
+embassy-executor     = { version = "0.5.0", features = ["nightly", "executor-interrupt", "executor-thread", "integrated-timers"] }
+embassy-embedded-hal = { version = "0.1.0" }
+embassy-futures      = { version = "0.1.1" }
+embassy-sync         = { version = "0.6.0" }
+embassy-time         = { version = "0.3.1" }
+embassy-time-driver  = { version = "0.1.0" }
+embedded-hal         = { version = "1.0.0" }
+embedded-hal-async   = { version = "1.0.0" }
+embedded-hal-bus     = { version = "0.2.0" }
+embedded-io          = { version = "0.6.1" }
+embedded-io-async    = { version = "0.6.1" }
 
 embassy-net = { version = "0.4.0", features = ["defmt", "medium-ethernet", "dhcpv4", "proto-ipv4", "tcp", "udp", "dns"] }
 esp-wifi = { version = "0.7.1", features = [
@@ -51,11 +51,10 @@ rust-mqtt = { version = "0.3.0", default-features = false, features = ["defmt"] 
 const_format = { version = "0.2.32" }
 toml-cfg = { version = "0.2.0" }
 
+imu-fusion = { version = "0.2.4" }
 icm20948-async = { git = "https://github.com/peterkrull/icm20948-async" }
+micromath = { version = "2.1.0" }
 circular-buffer = { version = "0.1", default-features = false }
-micromath = "2.1.0"
-imu-fusion = "0.2.4"
-const_format = "0.2.32"
 
 [profile.dev]
 # Rust debug is too slow.
