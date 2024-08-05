@@ -9,7 +9,7 @@ pub struct ImuTracker {
     pub fusion: Fusion,
     //pub euler: FusionEuler,
     pub latest_delta: f32,
-    pub earth_accel: FusionVector,
+    pub quaternion: FusionQuaternion,
     pub linear_accel: FusionVector,
 }
 
@@ -45,7 +45,7 @@ impl ImuTracker {
             fusion,
             //euler: FusionEuler::zero(),
             latest_delta: 0f32,
-            earth_accel: FusionVector::zero(),
+            quaternion: FusionQuaternion::identity(),
             linear_accel: FusionVector::zero(),
         }
     }
@@ -56,8 +56,8 @@ impl ImuTracker {
         let delta = time.duration_since(self.time).as_micros() as f32 / 1e6;
         self.time = time;
         self.latest_delta = delta;
-        self.fusion.update_by_duration_seconds(imu_gyro, imu_accel, imu_mag, delta);
 
+        self.fusion.update_by_duration_seconds(imu_gyro, imu_accel, imu_mag, delta);
         self.compute(imu_accel);
     }
 
@@ -68,13 +68,13 @@ impl ImuTracker {
         /* These doesn't seem to work well on the imu-rs implementation
         self.earth_accel = self.fusion.ahrs.earth_acc();
         self.linear_acc = self.fusion.ahrs.linear_acc();
-         */
-        let q = self.fusion.quaternion();
-        self.earth_accel = rotate(imu_accel, q);
+        */
+        self.quaternion = self.fusion.quaternion();
+        let rotated = rotate(imu_accel, self.quaternion);
 
-        self.linear_accel.x = self.earth_accel.x * 9.807;
-        self.linear_accel.y = self.earth_accel.y * 9.807;
-        self.linear_accel.z = (self.earth_accel.z - 1.) * 9.807;
+        self.linear_accel.x = rotated.x;
+        self.linear_accel.y = rotated.y;
+        self.linear_accel.z = rotated.z - 1.0;
     }
 
 }

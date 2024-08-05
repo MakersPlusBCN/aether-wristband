@@ -206,7 +206,7 @@ impl Default for Analysis {
     fn default() -> Self {
         let diagonal_low = 0.6 * PI / 4.0;
         let diagonal_high = 1.2 * PI / 4.0;
-        Analysis::new(100, 30, 1.5, diagonal_low, diagonal_high)
+        Analysis::new(100, 30, 0.14, diagonal_low, diagonal_high)
     }
 }
 
