@@ -275,7 +275,9 @@ async fn main(spawner: Spawner) -> ! {
                     Ok(meas) => {
                         let acc = FusionVector::new(meas.acc.x, meas.acc.y, meas.acc.z);
                         let gyr = FusionVector::new(meas.gyr.x, meas.gyr.y, meas.gyr.z);
-                        let mag = FusionVector::new(meas.mag.x, meas.mag.y, meas.mag.z);
+
+                        // Magnetometer axes are reflected along X axis, as per the datasheet
+                        let mag = FusionVector::new(meas.mag.x, -meas.mag.y, -meas.mag.z);
                         tracker.update(now, acc, gyr, mag);
                         let new_direction = analysis.add_measurement(tracker.linear_accel);
                         flag.set_low();
