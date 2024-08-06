@@ -7,22 +7,23 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 esp-backtrace = { version = "0.13.0", features = [
-    "esp32s3", "defmt",
+    "esp32s3",
     "exception-handler",
     "panic-handler",
+    "println",
 ] }
 esp-hal = { version = "0.19.0", features = [
-    "esp32s3", "defmt",
+    "esp32s3",
     "embassy-futures", "embassy-sync", "async",
     "embedded-io", "embedded-io-async", "embedded-hal"
 ] }
-esp-println = { version = "0.10.0", features = ["esp32s3", "defmt-espflash"] }
-defmt = { version = "0.3.8" }
+esp-println = { version = "0.10.0", features = ["esp32s3", "log"] }
+log = { version = "0.4.21" }
 esp-alloc = { version = "0.4.0", features = ["nightly"] }
 heapless = { version = "0.8.0", default-features = false }
 static_cell = { version = "2.1.0", features = ["nightly"] }
 
-esp-hal-embassy = { version = "0.2.0", features = ["esp32s3", "defmt", "integrated-timers"] }
+esp-hal-embassy = { version = "0.2.0", features = ["esp32s3", "log", "integrated-timers"] }
 embassy-executor     = { version = "0.5.0", features = ["nightly", "executor-interrupt", "executor-thread", "integrated-timers"] }
 embassy-embedded-hal = { version = "0.2.0" }
 embassy-futures      = { version = "0.1.1" }
@@ -35,7 +36,7 @@ embedded-hal-bus     = { version = "0.2.0" }
 embedded-io          = { version = "0.6.1" }
 embedded-io-async    = { version = "0.6.1" }
 
-embassy-net = { version = "0.4.0", features = ["defmt", "medium-ethernet", "dhcpv4", "proto-ipv4", "tcp", "udp", "dns"] }
+embassy-net = { version = "0.4.0", features = ["dhcpv4", "proto-ipv4", "tcp", "udp", "log", "dns", "medium-ethernet"] }
 esp-wifi = { version = "0.7.1", features = [
     "esp32s3",
     "wifi",
@@ -44,9 +45,9 @@ esp-wifi = { version = "0.7.1", features = [
     #"ps-min-modem",  # They are mutually exclusive. min is to sleep
     "wifi-default",   # Brings common protocols such as tcp, udp, dns, dhcp
     "embassy-net", "async",
-    "defmt",
+    "log",
 ], default-features = false }
-rust-mqtt = { version = "0.3.0", default-features = false, features = ["defmt"] }
+rust-mqtt = { version = "0.3.0", default-features = false }
 
 const_format = { version = "0.2.32" }
 toml-cfg = { version = "0.2.0" }
