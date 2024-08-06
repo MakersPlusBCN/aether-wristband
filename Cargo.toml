@@ -24,7 +24,7 @@ static_cell = { version = "2.1.0", features = ["nightly"] }
 
 esp-hal-embassy = { version = "0.2.0", features = ["esp32s3", "defmt", "integrated-timers"] }
 embassy-executor     = { version = "0.5.0", features = ["nightly", "executor-interrupt", "executor-thread", "integrated-timers"] }
-embassy-embedded-hal = { version = "0.1.0" }
+embassy-embedded-hal = { version = "0.2.0" }
 embassy-futures      = { version = "0.1.1" }
 embassy-sync         = { version = "0.6.0" }
 embassy-time         = { version = "0.3.1" }
