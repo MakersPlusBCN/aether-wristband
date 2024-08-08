@@ -2,25 +2,32 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
-use core::{mem::MaybeUninit, str::FromStr};
+use core::{mem::MaybeUninit, ptr::addr_of_mut, str::FromStr};
 
 use esp_backtrace as _;
 use esp_hal::{
-    system::SystemControl,
     clock::{ClockControl, CpuClock},
-    peripherals::Peripherals,
+    cpu_control::{CpuControl, Stack as CPUStack},
+    gpio::{Io, Level, Output, GpioPin},
     i2c::I2C,
-    gpio::{Io, Output, Level},
-    timer::OneShotTimer,
-    rng::Rng,
+    peripherals::{Peripherals, I2C0},
     prelude::*,
+    rng::Rng,
+    system::SystemControl,
+    timer::OneShotTimer,
+    Async
 };
 
+use esp_hal_embassy::Executor;
 use embassy_executor::Spawner;
-use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
+use embassy_time::{with_timeout, Delay, Duration, Instant, Ticker, Timer};
+use embassy_sync::{
+    blocking_mutex::raw::CriticalSectionRawMutex,
+    channel::{Channel, Sender},
+};
 
 use esp_println::println;
-use static_cell::make_static;
+use static_cell::{make_static, StaticCell};
 
 extern crate alloc;
 
@@ -39,6 +46,10 @@ use rust_mqtt::{
 
 use icm20948_async::{AccRange, AccDlp, AccUnit, GyrDlp, GyrRange, GyrUnit, IcmError, Icm20948};
 use imu_fusion::{FusionMatrix, FusionVector};
+
+const BLOCK_SIZE: usize = 1;
+type SampleBuffer = [u8; BLOCK_SIZE];
+const NUM_BLOCKS: usize = 2;
 
 mod analysis;
 mod config;
@@ -60,6 +71,98 @@ fn init_heap() {
     }
 }
 
+static mut APP_CORE_STACK: CPUStack<8192> = CPUStack::new();
+
+#[embassy_executor::task]
+async fn motion_analysis(
+    i2c: I2C<'static, I2C0, Async>,
+    sender: Sender<'static, CriticalSectionRawMutex, SampleBuffer, NUM_BLOCKS>,
+    mut flag_pin: Output<'static, GpioPin<2>>
+) {
+    // Create and await IMU object
+    let imu_configured = Icm20948::new_i2c(i2c, Delay)
+        // Configure accelerometer
+        .acc_range(AccRange::Gs8)
+        .acc_dlp(AccDlp::Hz111)
+        .acc_unit(AccUnit::Gs)
+        // Configure gyroscope
+        .gyr_range(GyrRange::Dps1000)
+        .gyr_dlp(GyrDlp::Hz120)
+        .gyr_unit(GyrUnit::Dps)
+        // Final initialization
+        .set_address(0x69);
+    let imu_result = imu_configured.initialize_9dof().await;
+
+    // Unpack IMU result safely and print error if necessary
+    let mut imu = match imu_result {
+        Ok(imu) => imu,
+        Err(error) => {
+            match error {
+                IcmError::BusError(_)   => log::error!("IMU_READER : IMU encountered a communication bus error"),
+                IcmError::ImuSetupError => log::error!("IMU_READER : IMU encountered an error during setup"),
+                IcmError::MagSetupError => log::error!("IMU_READER : IMU encountered an error during mag setup")
+            } panic!("Could not init IMU!");
+        }
+    };
+
+    // Calibrate gyroscope offsets using 100 samples
+    log::info!("IMU_READER : Reading gyroscopes, keep still");
+    let _gyr_cal = imu.gyr_calibrate(100).await.is_ok();
+
+    // Setup motion analysis
+    const IMU_SAMPLE_PERIOD: Duration = Duration::from_hz(200);
+
+    let acc_misalignment = FusionMatrix::identity();
+    let acc_offset = FusionVector::zero();
+    let acc_sensitivity = FusionVector::ones();
+    let gyr_offset = FusionVector::zero();
+    let mut tracker = ImuTracker::new(IMU_SAMPLE_PERIOD, Instant::now(), 1000.0f32,
+                                      acc_misalignment, acc_sensitivity, acc_offset, gyr_offset);
+    let mut analysis = Analysis::default();
+    // Main loop: reading the sensor and sending movement detection data to the broker
+
+    // moduli to keep a healthy load for the MQTT link
+    const DETECTION_REPORT_FREQ: Duration = Duration::from_hz(8);
+    const MOD_DETECTION: u32 = (DETECTION_REPORT_FREQ.as_ticks() / IMU_SAMPLE_PERIOD.as_ticks()) as u32;
+
+    let mut ticker = Ticker::every(IMU_SAMPLE_PERIOD);
+    let mut id: u32 = 0;
+    loop {
+        ticker.next().await;
+        id += 1;
+        let should_send_sample = id % MOD_DETECTION == 0;
+
+        let now = Instant::now();
+        flag_pin.set_high();
+        match imu.read_9dof().await {
+            Ok(meas) => {
+                let acc = FusionVector::new(meas.acc.x, meas.acc.y, meas.acc.z);
+                let gyr = FusionVector::new(meas.gyr.x, meas.gyr.y, meas.gyr.z);
+
+                // Magnetometer axes are reflected along X axis, as per the datasheet
+                let mag = FusionVector::new(meas.mag.x, -meas.mag.y, -meas.mag.z);
+
+                tracker.update(now, acc, gyr, mag);
+                let new_direction = analysis.add_measurement(tracker.linear_accel);
+                flag_pin.set_low();
+                if should_send_sample {
+                    if let Some(dir) = new_direction {
+                        let value: u8 = 0x30 + dir.as_digit();
+                        //let mark = (id % 100) as u8;
+                        //let payload: SampleBuffer = [mark, value];
+                        let payload: SampleBuffer = [value];
+
+                        sender.send(payload).await;
+                    }
+                }
+            },
+            Err(e) => {
+                log::error!("Reading IMU {e:?}");
+            }
+        }
+    }
+}
+
 
 #[main]
 async fn main(spawner: Spawner) -> ! {
@@ -69,10 +172,11 @@ async fn main(spawner: Spawner) -> ! {
     let peripherals = Peripherals::take();
     let system = SystemControl::new(peripherals.SYSTEM);
     let clocks = ClockControl::configure(system.clock_control, CpuClock::Clock160MHz).freeze();
+    let mut cpu_control = CpuControl::new(peripherals.CPU_CTRL);
     let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
     let mut rng = Rng::new(peripherals.RNG);
 
-    let mut flag = Output::new(io.pins.gpio5, Level::Low);
+    let mut flag = Output::new(io.pins.gpio2, Level::Low);
     flag.set_low();
 
     // Network setup start
@@ -99,10 +203,15 @@ async fn main(spawner: Spawner) -> ! {
         make_static!(
             [
              OneShotTimer::new(systimer.alarm0.into()),
-             //OneShotTimer::new(systimer.alarm1.into()),
+             OneShotTimer::new(systimer.alarm1.into()),
              ]
         )
     );
+
+    static CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, SampleBuffer, NUM_BLOCKS>> = StaticCell::new();
+    let channel = CHANNEL.init(Channel::new());
+    let sender = channel.sender();
+    let receiver = channel.receiver();
 
     // IMU bus start
     let sclk = io.pins.gpio8;
@@ -110,7 +219,6 @@ async fn main(spawner: Spawner) -> ! {
     //let miso = io.pins.gpio7;    // SDO on IMU board
     //let cs = io.pins.gpio5;
 
-    // Create and await IMU object
     let i2c0 = I2C::new_async(
         peripherals.I2C0,
         mosi,
@@ -118,44 +226,16 @@ async fn main(spawner: Spawner) -> ! {
         400.kHz(),
         &clocks,
     );
-    let imu_configured = Icm20948::new_i2c(i2c0, Delay)
-    // Configure accelerometer
-    .acc_range(AccRange::Gs8)
-    .acc_dlp(AccDlp::Hz111)
-    .acc_unit(AccUnit::Gs)
-    // Configure gyroscope
-    .gyr_range(GyrRange::Dps1000)
-    .gyr_dlp(GyrDlp::Hz120)
-    .gyr_unit(GyrUnit::Dps)
-    // Final initialization
-    .set_address(0x69);
-    let imu_result = imu_configured.initialize_9dof().await;
-    //spawner.must_spawn(imu_reader(i2c, out_imu_reading, sample_time))
-    // Unpack IMU result safely and print error if necessary
-    let mut imu = match imu_result {
-        Ok(imu) => imu,
-        Err(error) => {
-            match error {
-                IcmError::BusError(_)   => log::error!("IMU_READER : IMU encountered a communication bus error"),
-                IcmError::ImuSetupError => log::error!("IMU_READER : IMU encountered an error during setup"),
-                IcmError::MagSetupError => log::error!("IMU_READER : IMU encountered an error during mag setup")
-            } panic!("Could not init IMU!");
-        }
-    };
-    // Calibrate gyroscope offsets using 100 samples
-    log::info!("IMU_READER : Reading gyroscopes, keep still");
-    let _gyr_cal = imu.gyr_calibrate(100).await.is_ok();
-
-    const IMU_SAMPLE_PERIOD: Duration = Duration::from_hz(200);
-    const EVENT_TOPIC: &str = const_format::formatcp!("{}/event", FIRMWARE_CONFIG.mqtt_id);
-    let acc_misalignment = FusionMatrix::identity();
-    let acc_offset = FusionVector::zero();
-    let acc_sensitivity = FusionVector::ones();
-    let gyr_offset = FusionVector::zero();
-    let mut tracker = ImuTracker::new(IMU_SAMPLE_PERIOD, Instant::now(), 1000.0f32,
-                                      acc_misalignment, acc_sensitivity, acc_offset, gyr_offset);
-
-    let mut analysis = Analysis::default();
+    // Offload IMU reading and motion analysis to second core
+    let _guard = cpu_control
+        .start_app_core(unsafe { &mut *addr_of_mut!(APP_CORE_STACK) }, move || {
+            static EXECUTOR: StaticCell<Executor> = StaticCell::new();
+            let executor = EXECUTOR.init(Executor::new());
+            executor.run(|spawner| {
+                spawner.spawn(motion_analysis(i2c0, sender, flag)).unwrap();
+            });
+        })
+        .unwrap();
 
     // Init network stack
     let stack = &*make_static!(Stack::new(
@@ -237,62 +317,35 @@ async fn main(spawner: Spawner) -> ! {
             }
             log::info!("Connected to broker!");
 
-            // Main loop: reading the sensor and sending movement detection data to the broker
+            // Main loop: sending motion samples via 'client'
 
             // moduli to keep a healthy load for the MQTT link
-            const DETECTION_REPORT_FREQ: Duration = Duration::from_hz(8);
-            const MOD_DETECTION: u32 = (DETECTION_REPORT_FREQ.as_ticks() / IMU_SAMPLE_PERIOD.as_ticks()) as u32;
             const MQTT_PING_PERIOD: Duration = Duration::from_secs(4);
-            const MOD_MQTT_PING: u32 = (MQTT_PING_PERIOD.as_ticks() / IMU_SAMPLE_PERIOD.as_ticks()) as u32;
-            log::info!("Mod_det {MOD_DETECTION}, Mod_mq {MOD_MQTT_PING}");
-            let mut ticker = Ticker::every(IMU_SAMPLE_PERIOD);
-            let mut id: u32 = 0;
-            'sense: loop {
-                ticker.next().await;
-                id += 1;
-                let should_send_sample = id % MOD_DETECTION == 0;
-                // Adding 1 avoids both events coinciding, which would be redundant.
-                let should_send_ping = (id + 1) % MOD_MQTT_PING == 0;
+            const EVENT_TOPIC: &str = const_format::formatcp!("{}/event", FIRMWARE_CONFIG.mqtt_id);
+            loop {
+                let op = with_timeout(MQTT_PING_PERIOD,
+                    async {
+                        // Receive a buffer from the channel
+                        let buf: SampleBuffer = receiver.receive().await;
 
-                let now = Instant::now();
-                flag.set_high();
-                match imu.read_9dof().await {
-                    Ok(meas) => {
-                        let acc = FusionVector::new(meas.acc.x, meas.acc.y, meas.acc.z);
-                        let gyr = FusionVector::new(meas.gyr.x, meas.gyr.y, meas.gyr.z);
-
-                        // Magnetometer axes are reflected along X axis, as per the datasheet
-                        let mag = FusionVector::new(meas.mag.x, -meas.mag.y, -meas.mag.z);
-                        tracker.update(now, acc, gyr, mag);
-                        let new_direction = analysis.add_measurement(tracker.linear_accel);
-                        flag.set_low();
-                        if should_send_sample {
-                            if let Some(dir) = new_direction {
-                                let payload: [u8; 1] = [0x30 + dir.as_digit()];
-                                if let Err(result) = client
-                                    .send_message(
-                                        EVENT_TOPIC,
-                                        &payload,
-                                        QualityOfService::QoS0,
-                                        false,
-                                    )
-                                    .await {
-                                    if result != ReasonCode::Success {
-                                        log::error!("Could not publish because {result}; Restarting connection!");
-                                        break 'mqtt;
-                                    }
-                                }
-                                println!("{:02} {}", (id % 100), dir.as_char());
+                        if let Err(result) = client
+                            .send_message(
+                                EVENT_TOPIC,
+                                &buf,
+                                QualityOfService::QoS0,
+                                false,
+                            )
+                            .await {
+                            if result != ReasonCode::Success {
+                                log::error!("Could not publish because {result}; Restarting connection!");
+                                // TODO bubble the error up!
                             }
                         }
-                    },
-                    Err(e) => {
-                        log::error!("Reading IMU {e:?}");
-                        continue 'sense;
-                    }
-                }
+                        println!("{}", buf[0]);
+                }).await;
 
-                if should_send_ping {
+                if op.is_err() {
+                    // Timeout expired: send MQTT ping!
                     if let Err(result) = client.send_ping().await {
                         if result != ReasonCode::Success {
                             log::error!("Could not send ping because {result}; Restarting connection!");
