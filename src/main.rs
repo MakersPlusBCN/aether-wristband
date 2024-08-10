@@ -109,7 +109,7 @@ async fn motion_analysis(
         Err(error) => {
             match error {
                 IcmError::BusError(_)   => log::error!("IMU_READER : IMU encountered a communication bus error"),
-                IcmError::ImuSetupError => log::error!("IMU_READER : IMU encountered an error during setup"),
+                IcmError::ImuSetupError(whoami) => log::error!("IMU_READER : IMU encountered an error during setup (WHO_AM_I is 0x{:X})", whoami),
                 IcmError::MagSetupError => log::error!("IMU_READER : IMU encountered an error during mag setup")
             } panic!("Could not init IMU!");
         }

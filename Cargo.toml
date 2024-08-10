@@ -53,7 +53,8 @@ const_format = { version = "0.2.32" }
 toml-cfg = { version = "0.2.0" }
 
 imu-fusion = { version = "0.2.4" }
-icm20948-async = { git = "https://github.com/peterkrull/icm20948-async" }
+#icm20948-async = { git = "https://github.com/peterkrull/icm20948-async" }
+icm20948-async = { path = "./icm20948-async" }
 micromath = { version = "2.1.0" }
 circular-buffer = { version = "0.1", default-features = false }
 

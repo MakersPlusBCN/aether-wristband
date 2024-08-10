@@ -1,0 +1,3 @@
+[submodule "icm20948-async"]
+	path = icm20948-async
+	url = https://github.com/peterkrull/icm20948-async
