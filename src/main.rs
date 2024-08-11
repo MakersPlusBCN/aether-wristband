@@ -34,7 +34,7 @@ extern crate alloc;
 use esp_wifi::wifi::{
     AuthMethod, WifiController, WifiDevice, WifiEvent, WifiStaDevice, WifiState
 };
-use embassy_net::{tcp::TcpSocket, Config, Ipv4Address, Stack, StackResources};
+use embassy_net::{dns::DnsQueryType, tcp::TcpSocket, Config, Ipv4Address, Stack, StackResources};
 use rust_mqtt::{
     client::{client::MqttClient, client_config::ClientConfig},
     packet::v5::{
@@ -254,10 +254,6 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(connection(controller)).ok();
     spawner.spawn(net_task(stack)).ok();
 
-    let remote_endpoint = (
-        Ipv4Address::from_str(FIRMWARE_CONFIG.mqtt_host).unwrap(),
-        FIRMWARE_CONFIG.mqtt_port.parse::<u16>().unwrap()
-    );
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
 
@@ -280,11 +276,25 @@ async fn main(spawner: Spawner) -> ! {
 
         // Inner loop that maintains connectivity to the MQTT broker
         'mqtt: loop {
-            let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-            socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
-
+            let host = match stack.dns_query(FIRMWARE_CONFIG.mqtt_host, DnsQueryType::A).await {
+                Ok(r) => {
+                    log::info!("DNS query response: {:?}", r);
+                    r[0]
+                }
+                Err(e) => {
+                    log::warn!("DNS query error: {:?}", e);
+                    continue 'mqtt;
+                    //IpAddress::from_str(FIRMWARE_CONFIG.mqtt_host).unwrap()
+                }
+            };
+            let remote_endpoint = (
+                host,
+                FIRMWARE_CONFIG.mqtt_port.parse::<u16>().unwrap()
+            );
 
             log::info!("Connecting...");
+            let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+            socket.set_timeout(Some(Duration::from_secs(10)));
             Timer::after(Duration::from_millis(500)).await;
             if let Err(e) = socket.connect(remote_endpoint).await {
                 log::error!("connecting: {:?}", e);
@@ -334,7 +344,6 @@ async fn main(spawner: Spawner) -> ! {
                     async {
                         // Receive a buffer from the channel
                         let buf: SampleBuffer = receiver.receive().await;
-
                         if let Err(result) = client
                             .send_message(
                                 EVENT_TOPIC,
