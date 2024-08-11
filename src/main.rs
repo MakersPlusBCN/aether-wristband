@@ -244,9 +244,11 @@ async fn main(spawner: Spawner) -> ! {
         .unwrap();
 
     // Init network stack
+    let mut dhcp_config: embassy_net::DhcpConfig = Default::default();
+    dhcp_config.hostname = Some(heapless::String::from_str(FIRMWARE_CONFIG.mqtt_id).unwrap());
     let stack = &*make_static!(Stack::new(
         wifi_interface,
-        Config::dhcpv4(Default::default()),
+        Config::dhcpv4(dhcp_config),
         make_static!(StackResources::<3>::new()),
         seed
     ));
@@ -309,7 +311,7 @@ async fn main(spawner: Spawner) -> ! {
             const KEEP_ALIVE: u16 = 5;
             config.add_max_subscribe_qos(rust_mqtt::packet::v5::publish_packet::QualityOfService::QoS1);
             config.add_client_id(FIRMWARE_CONFIG.mqtt_id);
-            config.add_username(FIRMWARE_CONFIG.mqtt_user);
+            config.add_username(FIRMWARE_CONFIG.mqtt_id);
             config.add_password(FIRMWARE_CONFIG.mqtt_pass);
             config.keep_alive = KEEP_ALIVE;
             config.max_packet_size = 100;
