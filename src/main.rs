@@ -179,7 +179,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut flag = Output::new(io.pins.gpio2, Level::Low);
     flag.set_low();
 
-    // Network setup start
+    // WiFi PHY start
     let seed = ((rng.random() as u64) << 32) | (rng.random() as u64);
     let timer = esp_hal::timer::PeriodicTimer::new(
         esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG1, &clocks, None)
@@ -208,12 +208,13 @@ async fn main(spawner: Spawner) -> ! {
         )
     );
 
+    // Message channel for IMU->MQTT payload passing
     static CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, SampleBuffer, NUM_BLOCKS>> = StaticCell::new();
     let channel = CHANNEL.init(Channel::new());
     let sender = channel.sender();
     let receiver = channel.receiver();
 
-    // IMU bus start
+    // I2C to IMU start
     let sclk = io.pins.gpio8;
     let mosi = io.pins.gpio10;  // SDA on IMU board
     //let miso = io.pins.gpio7;    // SDO on IMU board
@@ -256,10 +257,11 @@ async fn main(spawner: Spawner) -> ! {
     let mut tx_buffer = [0; 4096];
 
     // Outer loop that maintains WiFi connectivity
-    loop {
+    'conn: loop {
         log::info!("Bringing network link up...");
-        while !stack.is_link_up() {
-            Timer::after(Duration::from_millis(500)).await;
+        Timer::after(Duration::from_millis(500)).await;
+        if !stack.is_link_up() {
+            continue 'conn;
         }
 
         log::info!("Waiting to get IP address...");
