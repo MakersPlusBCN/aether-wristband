@@ -242,11 +242,10 @@ impl Analysis {
         linear_acceleration: FusionVector,
     ) -> Option<MovementDirection> {
         let smoothed = self.smoothing.add_measurement(linear_acceleration);
-        let x = (smoothed.x * smoothed.x + smoothed.y * smoothed.y).sqrt(); // compute euclidean norm of x and y component
-        let y = smoothed.z.abs();
-        assert!(!x.is_nan());
-        assert!(!y.is_nan());
-        self.movement_detection.add_measurement(x, y)
+        let horiz = smoothed.x.powi(2) + smoothed.y.powi(2); // fuse horizontal components into one
+        let verti = smoothed.z.powi(2);
+        // avoid square roots, they are a monotonous scaling
+        self.movement_detection.add_measurement(horiz, verti)
     }
 }
 
