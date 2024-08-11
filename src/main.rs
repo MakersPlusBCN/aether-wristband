@@ -348,9 +348,8 @@ async fn main(spawner: Spawner) -> ! {
                                 // TODO bubble the error up!
                             }
                         }
-                        println!("{}", buf[0]);
+                        println!("{}", buf[0] as char);
                 }).await;
-
                 if op.is_err() {
                     // Timeout expired: send MQTT ping!
                     if let Err(result) = client.send_ping().await {
