@@ -50,6 +50,7 @@ use imu_fusion::{FusionMatrix, FusionVector};
 const BLOCK_SIZE: usize = 1;
 type SampleBuffer = [u8; BLOCK_SIZE];
 const NUM_BLOCKS: usize = 2;
+use core::f32::consts::PI;
 
 mod analysis;
 mod config;
@@ -118,10 +119,14 @@ async fn motion_analysis(
     let gyr_offset = FusionVector::zero();
     let mut tracker = ImuTracker::new(IMU_SAMPLE_PERIOD, Instant::now(), 1000.0f32,
                                       acc_misalignment, acc_sensitivity, acc_offset, gyr_offset);
-    let mut analysis = Analysis::default();
+    //let mut analysis = Analysis::default();
+    const DIAGONAL_BAND_DEG: f32 = 25.0;
+    let mut analysis = Analysis::new(60, 30, 0.12,
+                                               DIAGONAL_BAND_DEG*PI/180.0,
+                                               (90.0 - DIAGONAL_BAND_DEG)*PI/180.0);
     // Main loop: reading the sensor and sending movement detection data to the broker
 
-    // moduli to keep a healthy load for the MQTT link
+    // modulus to send motion direction samples at a low rate
     const DETECTION_REPORT_FREQ: Duration = Duration::from_hz(8);
     const MOD_DETECTION: u32 = (DETECTION_REPORT_FREQ.as_ticks() / IMU_SAMPLE_PERIOD.as_ticks()) as u32;
 
@@ -291,19 +296,19 @@ async fn main(spawner: Spawner) -> ! {
                 rust_mqtt::client::client_config::MqttVersion::MQTTv5,
                 CountingRng(20000),
             );
+            const KEEP_ALIVE: u16 = 5;
             config.add_max_subscribe_qos(rust_mqtt::packet::v5::publish_packet::QualityOfService::QoS1);
             config.add_client_id(FIRMWARE_CONFIG.mqtt_id);
             config.add_username(FIRMWARE_CONFIG.mqtt_user);
             config.add_password(FIRMWARE_CONFIG.mqtt_pass);
+            config.keep_alive = KEEP_ALIVE;
             config.max_packet_size = 100;
-            let mut recv_buffer = [0; 80];
-            let mut write_buffer = [0; 80];
+            let mut recv_buffer = [0; 128];
+            let mut write_buffer = [0; 128];
             let mut client = MqttClient::<_, 5, _>::new(
                 socket,
-                &mut write_buffer,
-                80,
-                &mut recv_buffer,
-                80,
+                &mut write_buffer, 128,
+                &mut recv_buffer, 128,
                 config,
             );
             log::info!("Attempting broker connection...");
@@ -322,7 +327,7 @@ async fn main(spawner: Spawner) -> ! {
             // Main loop: sending motion samples via 'client'
 
             // moduli to keep a healthy load for the MQTT link
-            const MQTT_PING_PERIOD: Duration = Duration::from_secs(4);
+            const MQTT_PING_PERIOD: Duration = Duration::from_secs(KEEP_ALIVE as u64*7/8);
             const EVENT_TOPIC: &str = const_format::formatcp!("{}/event", FIRMWARE_CONFIG.mqtt_id);
             loop {
                 let op = with_timeout(MQTT_PING_PERIOD,
@@ -351,7 +356,7 @@ async fn main(spawner: Spawner) -> ! {
                     if let Err(result) = client.send_ping().await {
                         if result != ReasonCode::Success {
                             log::error!("Could not send ping because {result}; Restarting connection!");
-                            break 'mqtt;
+                            continue 'mqtt;
                         }
                     }
                 }
