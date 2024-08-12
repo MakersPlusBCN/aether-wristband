@@ -1,0 +1,25 @@
+[test-xtensa-nostd]
+# The MQTT ID works here as:
+# - host name for this device
+# - MQTT ID
+# - MQTT user name
+mqtt_id = "imu0"
+
+mqtt_pass = "password"
+mqtt_port = "1883"
+
+mqtt_host = "broker-hostname"     # Don't use '.local' TLD, that's mDNS!
+wifi_ssid = "wifi-AP-name"
+wifi_psk = "wifi-AP-password"
+
+[esp-wifi]
+# See other options available at:
+# https://github.com/esp-rs/esp-hal/blob/main/esp-wifi/tuning.md
+country_code = "ES "
+rx_queue_size = 5
+tx_queue_size = 5
+static_rx_buf_num = 10
+dynamic_rx_buf_num = 16
+static_tx_buf_num = 10
+dynamic_tx_buf_num = 16
+max_burst_size = 6
