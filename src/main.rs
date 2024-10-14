@@ -48,7 +48,7 @@ use icm20948_async::{AccRange, AccDlp, AccUnit, GyrDlp, GyrRange, GyrUnit, IcmEr
 use imu_fusion::{FusionMatrix, FusionVector};
 
 const BLOCK_SIZE: usize = 1;
-type SampleBuffer = [u8; BLOCK_SIZE];
+type ChannelBuffer = [u8; BLOCK_SIZE];
 const NUM_BLOCKS: usize = 2;
 use core::f32::consts::PI;
 
@@ -77,7 +77,7 @@ static mut APP_CORE_STACK: CPUStack<8192> = CPUStack::new();
 #[embassy_executor::task]
 async fn motion_analysis(
     i2c: I2C<'static, I2C0, Async>,
-    sender: Sender<'static, CriticalSectionRawMutex, SampleBuffer, NUM_BLOCKS>,
+    sample_sender: Sender<'static, CriticalSectionRawMutex, ChannelBuffer, NUM_BLOCKS>,
     mut flag_pin: Output<'static, GpioPin<2>>
 ) {
     // Create and await IMU object
@@ -132,7 +132,7 @@ async fn motion_analysis(
 
     let mut ticker = Ticker::every(IMU_SAMPLE_PERIOD);
     let mut id: u32 = 0;
-    loop {
+    'sample: loop {
         ticker.next().await;
         id += 1;
         let should_send_sample = id % MOD_DETECTION == 0;
@@ -155,14 +155,15 @@ async fn motion_analysis(
                         let value: u8 = 0x30 + dir.as_digit();
                         //let mark = (id % 100) as u8;
                         //let payload: SampleBuffer = [mark, value];
-                        let payload: SampleBuffer = [value];
+                        let payload: ChannelBuffer = [value];
 
-                        sender.send(payload).await;
+                        sample_sender.send(payload).await;
                     }
                 }
             },
             Err(e) => {
                 log::error!("Reading IMU {e:?}");
+                break 'sample;
             }
         }
     }
@@ -214,10 +215,10 @@ async fn main(spawner: Spawner) -> ! {
     );
 
     // Message channel for IMU->MQTT payload passing
-    static CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, SampleBuffer, NUM_BLOCKS>> = StaticCell::new();
-    let channel = CHANNEL.init(Channel::new());
-    let sender = channel.sender();
-    let receiver = channel.receiver();
+    static CHANNEL_SAMPLES: StaticCell<Channel<CriticalSectionRawMutex, ChannelBuffer, NUM_BLOCKS>> = StaticCell::new();
+    let channel_samples = CHANNEL_SAMPLES.init(Channel::new());
+    let sender_samples = channel_samples.sender();
+    let receiver_samples = channel_samples.receiver();
 
     // I2C to IMU start
     let sclk = io.pins.gpio8;
@@ -238,7 +239,7 @@ async fn main(spawner: Spawner) -> ! {
             static EXECUTOR: StaticCell<Executor> = StaticCell::new();
             let executor = EXECUTOR.init(Executor::new());
             executor.run(|spawner| {
-                spawner.spawn(motion_analysis(i2c0, sender, flag)).unwrap();
+                spawner.spawn(motion_analysis(i2c0, sender_samples, flag)).unwrap();
             });
         })
         .unwrap();
@@ -345,7 +346,7 @@ async fn main(spawner: Spawner) -> ! {
                 let op = with_timeout(MQTT_PING_PERIOD,
                     async {
                         // Receive a buffer from the channel
-                        let buf: SampleBuffer = receiver.receive().await;
+                        let buf: ChannelBuffer = receiver.receive().await;
                         if let Err(result) = client
                             .send_message(
                                 EVENT_TOPIC,
