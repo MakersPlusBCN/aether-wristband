@@ -20,13 +20,15 @@ use esp_hal::{
 
 use esp_hal_embassy::Executor;
 use embassy_executor::Spawner;
-use embassy_time::{with_timeout, Delay, Duration, Instant, Ticker, Timer};
+use embassy_futures::select::{select, Either, select3, Either3};
+use embassy_time::{Delay, Duration, Instant, Timer};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     channel::{Channel, Sender},
 };
 
 use esp_println::println;
+use heapless::Vec;
 use static_cell::{make_static, StaticCell};
 
 extern crate alloc;
@@ -47,18 +49,18 @@ use rust_mqtt::{
 use icm20948_async::{AccRange, AccDlp, AccUnit, GyrDlp, GyrRange, GyrUnit, IcmError, Icm20948};
 use imu_fusion::{FusionMatrix, FusionVector};
 
-const BLOCK_SIZE: usize = 1;
-type ChannelBuffer = [u8; BLOCK_SIZE];
 const NUM_BLOCKS: usize = 2;
 use core::f32::consts::PI;
 
 mod analysis;
 mod config;
+mod control;
 mod imu_tracker;
 
 use crate::config::FIRMWARE_CONFIG;
 use imu_tracker::ImuTracker;
 use analysis::Analysis;
+use control::{MessageTopics, MAX_SIZE, MQTTMessage};
 
 #[global_allocator]
 static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
@@ -77,7 +79,7 @@ static mut APP_CORE_STACK: CPUStack<8192> = CPUStack::new();
 #[embassy_executor::task]
 async fn motion_analysis(
     i2c: I2C<'static, I2C0, Async>,
-    sample_sender: Sender<'static, CriticalSectionRawMutex, ChannelBuffer, NUM_BLOCKS>,
+    event_sender: Sender<'static, CriticalSectionRawMutex, MQTTMessage, NUM_BLOCKS>,
     mut flag_pin: Output<'static, GpioPin<2>>
 ) {
     // Create and await IMU object
@@ -215,7 +217,7 @@ async fn main(spawner: Spawner) -> ! {
     );
 
     // Message channel for IMU->MQTT payload passing
-    static CHANNEL_SAMPLES: StaticCell<Channel<CriticalSectionRawMutex, ChannelBuffer, NUM_BLOCKS>> = StaticCell::new();
+    static CHANNEL_SAMPLES: StaticCell<Channel<CriticalSectionRawMutex, MQTTMessage, NUM_BLOCKS>> = StaticCell::new();
     let channel_samples = CHANNEL_SAMPLES.init(Channel::new());
     let sender_samples = channel_samples.sender();
     let receiver_samples = channel_samples.receiver();
@@ -341,16 +343,20 @@ async fn main(spawner: Spawner) -> ! {
 
             // moduli to keep a healthy load for the MQTT link
             const MQTT_PING_PERIOD: Duration = Duration::from_secs(KEEP_ALIVE as u64*7/8);
-            const EVENT_TOPIC: &str = const_format::formatcp!("{}/event", FIRMWARE_CONFIG.mqtt_id);
+
             loop {
-                let op = with_timeout(MQTT_PING_PERIOD,
-                    async {
+                let futures = select3(
+                    receiver_samples.receive(),
+                    Timer::after(MQTT_PING_PERIOD),
+                ).await;
+                match futures {
+                    Either3::First(buf) => {
+                        let topic = buf.topic.as_str();
                         // Receive a buffer from the channel
-                        let buf: ChannelBuffer = receiver.receive().await;
                         if let Err(result) = client
                             .send_message(
-                                EVENT_TOPIC,
-                                &buf,
+                                topic,
+                                &buf.payload,
                                 QualityOfService::QoS0,
                                 false,
                             )
@@ -360,14 +366,17 @@ async fn main(spawner: Spawner) -> ! {
                                 // TODO bubble the error up!
                             }
                         }
-                        println!("{}", buf[0] as char);
-                }).await;
-                if op.is_err() {
-                    // Timeout expired: send MQTT ping!
-                    if let Err(result) = client.send_ping().await {
-                        if result != ReasonCode::Success {
-                            log::error!("Could not send ping because {result}; Restarting connection!");
+                        println!("{:?}", String::from_utf8_lossy(&buf.payload));
                             continue 'mqtt;
+                        }
+                    }
+                    Either3::Third(_) => {
+                        // Timeout expired: send MQTT ping!
+                        if let Err(result) = client.send_ping().await {
+                            if result != ReasonCode::Success {
+                                log::error!("Could not send ping because {result}; Restarting connection!");
+                                continue 'mqtt;
+                            }
                         }
                     }
                 }
