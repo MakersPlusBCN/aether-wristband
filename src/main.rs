@@ -319,19 +319,21 @@ async fn main(spawner: Spawner) -> ! {
     // Outer loop that maintains WiFi connectivity
     'conn: loop {
         sender_led.send(SysStates::BringUp as u8).await;
-        log::info!("Bringing network link up...");
-        Timer::after(Duration::from_millis(500)).await;
-        if !stack.is_link_up() {
-            continue 'conn;
-        }
 
-        log::info!("Waiting to get IP address...");
-        'ip: loop {
-            if let Some(config) = stack.config_v4() {
-                log::info!("Got IP: {}", config.address);
-                break 'ip;
+        let futures = select(
+            Timer::after(Duration::from_millis(1000)),
+            stack.wait_config_up()
+        ).await;
+        match futures {
+            Either::First(_) => {
+                log::info!("Bringing network link up...");
+                continue 'conn;
             }
-            Timer::after(Duration::from_millis(500)).await;
+            Either::Second(_) => {
+                if let Some(config) = stack.config_v4() {
+                    log::info!("Got IP: {}", config.address);
+                }
+            }
         }
 
         // Inner loop that maintains connectivity to the MQTT broker
