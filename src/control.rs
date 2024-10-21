@@ -6,6 +6,17 @@ use crate::config::FIRMWARE_CONFIG;
 pub enum SysCommands {
     Restart,
 }
+
+#[repr(u8)]
+pub enum SysStates {
+    BringUp = 0,
+    ConnectingPhy = 40,
+    ConnectedPhy = 80,
+    ConnectingNet = 120,
+    ConnectingBroker = 180,
+    ConnectedBroker = 210,
+}
+
 pub enum MessageTopics {
     Event,
 }

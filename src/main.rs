@@ -8,14 +8,15 @@ use esp_backtrace as _;
 use esp_hal::{
     clock::{ClockControl, CpuClock},
     cpu_control::{CpuControl, Stack as CPUStack},
-    gpio::{Io, Level, Output, GpioPin},
+    gpio::{GpioPin, Input, Io, Level, Output, Pull},
     i2c::I2C,
     peripherals::{Peripherals, I2C0},
     prelude::*,
+    rmt::Rmt,
     rng::Rng,
     system::SystemControl,
     timer::OneShotTimer,
-    Async
+    Async, Blocking,
 };
 
 use esp_hal_embassy::Executor;
@@ -46,6 +47,16 @@ use rust_mqtt::{
     utils::rng_generator::CountingRng,
 };
 
+use esp_hal_smartled::{
+    smartLedBuffer,
+    SmartLedsAdapter,
+};
+use smart_leds::{
+    brightness, gamma,
+    hsv::{hsv2rgb, Hsv},
+    SmartLedsWrite,
+};
+
 use icm20948_async::{AccRange, AccDlp, AccUnit, GyrDlp, GyrRange, GyrUnit, IcmError, Icm20948};
 use imu_fusion::{FusionMatrix, FusionVector};
 
@@ -62,6 +73,7 @@ use imu_tracker::ImuTracker;
 use analysis::Analysis;
 use control::{
     SysCommands,
+    SysStates,
     MessageTopics,
     MAX_SIZE,
     MQTTMessage
@@ -211,6 +223,19 @@ async fn main(spawner: Spawner) -> ! {
     let mut flag = Output::new(io.pins.gpio2, Level::Low);
     flag.set_low();
 
+    let led_pin = io.pins.gpio48;
+    let freq = 80.MHz();
+    let rmt = Rmt::new(peripherals.RMT, freq, &clocks, None).unwrap();
+    let rmt_buffer = smartLedBuffer!(1);
+    let led  = SmartLedsAdapter::new(rmt.channel0, led_pin, rmt_buffer, &clocks);
+
+    // Message channel for LED setting
+    static CHANNEL_LED: StaticCell<Channel<CriticalSectionRawMutex, u8, 1>> = StaticCell::new();
+    let channel_led = CHANNEL_LED.init(Channel::new());
+    let sender_led = channel_led.sender();
+
+    spawner.spawn(led_driving(led, channel_led.receiver())).ok();
+
     // WiFi PHY start
     let seed = ((rng.random() as u64) << 32) | (rng.random() as u64);
     let timer = esp_hal::timer::PeriodicTimer::new(
@@ -270,6 +295,11 @@ async fn main(spawner: Spawner) -> ! {
         })
         .unwrap();
 
+    // Power handling via GPIO pins
+    let enable_pin_out = Output::new(io.pins.gpio4, Level::High);
+    let low_batt_pin_in = Input::new(io.pins.gpio3, Pull::Down);
+    spawner.spawn(power_handling(channel_evts.subscriber().unwrap(), channel_samples.sender(), enable_pin_out, low_batt_pin_in)).ok();
+
     // Init network stack
     let mut dhcp_config: embassy_net::DhcpConfig = Default::default();
     dhcp_config.hostname = Some(heapless::String::from_str(FIRMWARE_CONFIG.mqtt_id).unwrap());
@@ -280,7 +310,7 @@ async fn main(spawner: Spawner) -> ! {
         seed
     ));
 
-    spawner.spawn(connection(controller)).ok();
+    spawner.spawn(connection(controller, channel_led.sender())).ok();
     spawner.spawn(net_task(stack)).ok();
 
     let mut rx_buffer = [0; 4096];
@@ -288,6 +318,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // Outer loop that maintains WiFi connectivity
     'conn: loop {
+        sender_led.send(SysStates::BringUp as u8).await;
         log::info!("Bringing network link up...");
         Timer::after(Duration::from_millis(500)).await;
         if !stack.is_link_up() {
@@ -305,6 +336,7 @@ async fn main(spawner: Spawner) -> ! {
 
         // Inner loop that maintains connectivity to the MQTT broker
         'mqtt: loop {
+            sender_led.send(SysStates::ConnectingNet as u8).await;
             let host = match stack.dns_query(FIRMWARE_CONFIG.mqtt_host, DnsQueryType::A).await {
                 Ok(r) => {
                     log::info!("DNS query response: {:?}", r);
@@ -330,6 +362,7 @@ async fn main(spawner: Spawner) -> ! {
                 continue 'mqtt;
             }
             log::info!("Connected!");
+            sender_led.send(SysStates::ConnectingBroker as u8).await;
 
             let mut config = ClientConfig::new(
                 rust_mqtt::client::client_config::MqttVersion::MQTTv5,
@@ -362,6 +395,7 @@ async fn main(spawner: Spawner) -> ! {
                 Timer::after(Duration::from_millis(500)).await;
             }
             log::info!("Connected to broker!");
+            sender_led.send(SysStates::ConnectedBroker as u8).await;
 
             // Main loop: sending motion samples via 'client'
 
@@ -410,15 +444,19 @@ async fn main(spawner: Spawner) -> ! {
 }
 
 #[embassy_executor::task]
-async fn connection(mut controller: WifiController<'static>) {
-    log::info!("start connection task");
-    log::info!("Device capabilities: {:?}", controller.get_capabilities());
+async fn connection(
+    mut controller: WifiController<'static>,
+    sender_led: Sender<'static, CriticalSectionRawMutex, u8, 1>,
+) {
     loop {
         if esp_wifi::wifi::get_wifi_state() == WifiState::StaConnected {
             // wait until we're no longer connected
             controller.wait_for_event(WifiEvent::StaDisconnected).await;
-            Timer::after(Duration::from_millis(5000)).await
         }
+        // We've been disconnected
+        sender_led.send(SysStates::ConnectingPhy as u8).await;
+        Timer::after(Duration::from_millis(2000)).await;
+
         if !matches!(controller.is_started(), Ok(true)) {
             let client_config = esp_wifi::wifi::Configuration::Client(esp_wifi::wifi::ClientConfiguration {
                 ssid: FIRMWARE_CONFIG.wifi_ssid.parse().unwrap(),
@@ -432,9 +470,13 @@ async fn connection(mut controller: WifiController<'static>) {
             log::info!("Wifi started!");
         }
         log::info!("About to connect...");
+        sender_led.send(30).await;
 
         match controller.connect().await {
-            Ok(_) => log::info!("Wifi connected!"),
+            Ok(_) => {
+                sender_led.send(SysStates::ConnectedPhy as u8).await;
+                log::info!("Wifi connected!");
+            },
             Err(e) => {
                 log::error!("Failed to connect to wifi: {e:?}");
                 Timer::after(Duration::from_millis(5000)).await
@@ -446,4 +488,31 @@ async fn connection(mut controller: WifiController<'static>) {
 #[embassy_executor::task]
 async fn net_task(stack: &'static Stack<WifiDevice<'static, WifiStaDevice>>) {
     stack.run().await
+}
+#[embassy_executor::task]
+async fn led_driving (
+    mut led: SmartLedsAdapter<esp_hal::rmt::Channel<Blocking, 0>, 25>,
+    cmd_receiver: Receiver<'static, CriticalSectionRawMutex, u8, 1>,
+)
+{
+    let mut color = Hsv {
+        hue: 0,
+        sat: 255,
+        val: 255,
+    };
+    let mut data;
+
+    loop {
+        let hue = cmd_receiver.receive().await;
+        color.hue = hue;
+        // Convert from the HSV color space (where we can easily transition from one
+        // color to the other) to the RGB color space that we can then send to the LED
+        data = [hsv2rgb(color)];
+        // When sending to the LED, we do a gamma correction first (see smart_leds
+        // documentation for details) and then limit the brightness to 10 out of 255 so
+        // that the output it's not too bright.
+        if let Err(e) = led.write(brightness(gamma(data.iter().cloned()), 20)) {
+            log::error!("Driving LED: {:?}", e);
+        }
+    }
 }
