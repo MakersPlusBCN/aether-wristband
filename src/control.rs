@@ -5,6 +5,7 @@ use crate::config::FIRMWARE_CONFIG;
 #[derive(Clone)]
 pub enum SysCommands {
     Restart,
+    PowerOff,
 }
 
 #[repr(u8)]
@@ -19,6 +20,7 @@ pub enum SysStates {
 
 pub enum MessageTopics {
     Event,
+    Report,
 }
 
 impl MessageTopics {

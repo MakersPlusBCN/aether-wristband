@@ -4,6 +4,7 @@
 
 use core::{mem::MaybeUninit, ptr::addr_of_mut, str::FromStr};
 
+use alloc::string::String;
 use esp_backtrace as _;
 use esp_hal::{
     clock::{ClockControl, CpuClock},
@@ -282,7 +283,6 @@ async fn main(spawner: Spawner) -> ! {
     let mosi = io.pins.gpio10;  // SDA on IMU board
     //let miso = io.pins.gpio7;    // SDO on IMU board
     //let cs = io.pins.gpio5;
-
     let i2c0 = I2C::new_async(
         peripherals.I2C0,
         mosi,
@@ -554,12 +554,45 @@ fn dispatch_incoming_mqtt_message(
         "cmd" => {
             match payload {
                 "reset" => Some(SysCommands::Restart),
+                "off" => Some(SysCommands::PowerOff),
                 _ => None
             }
         }
         _ => None
     }
 }
+
+#[embassy_executor::task]
+async fn power_handling(
+    mut cmd_receiver: Subscriber<'static, CriticalSectionRawMutex, SysCommands, 1, 3, 2>,
+    event_sender: Sender<'static, CriticalSectionRawMutex, MQTTMessage, NUM_BLOCKS>,
+    mut enable_pin: Output<'static, GpioPin<4>>,
+    mut low_battery_pin: Input<'static, GpioPin<3>>
+) {
+    loop {
+        let futures = select(
+            low_battery_pin.wait_for_rising_edge(),
+            cmd_receiver.next_message()
+        ).await;
+        match futures {
+            Either::First(_) => {
+                let event = MQTTMessage {
+                    topic: MessageTopics::Report,
+                    payload: Vec::<u8, MAX_SIZE>::from_slice("low-batt".as_bytes()).unwrap(),
+                };
+                event_sender.send(event).await;
+                log::warn!("Low battery detected!");
+            }
+            Either::Second(cmd) => {
+                if let WaitResult::Message(SysCommands::PowerOff) = cmd {
+                    log::warn!("Shutting down!");
+                    enable_pin.set_low();
+                }
+            }
+        }
+    }
+}
+
 #[embassy_executor::task]
 async fn led_driving (
     mut led: SmartLedsAdapter<esp_hal::rmt::Channel<Blocking, 0>, 25>,
