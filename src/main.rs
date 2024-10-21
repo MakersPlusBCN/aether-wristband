@@ -2,7 +2,7 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
-use core::{mem::MaybeUninit, ptr::addr_of_mut, str::FromStr};
+use core::{mem::MaybeUninit, ptr::addr_of_mut, str::{self, FromStr}};
 
 use alloc::string::String;
 use esp_backtrace as _;
@@ -39,7 +39,7 @@ extern crate alloc;
 use esp_wifi::wifi::{
     AuthMethod, WifiController, WifiDevice, WifiEvent, WifiStaDevice, WifiState
 };
-use embassy_net::{dns::DnsQueryType, tcp::TcpSocket, Config, Ipv4Address, Stack, StackResources};
+use embassy_net::{dns::DnsQueryType, tcp::TcpSocket, Config, Stack, StackResources};
 use rust_mqtt::{
     client::{client::MqttClient, client_config::ClientConfig},
     packet::v5::{
@@ -93,7 +93,8 @@ fn init_heap() {
     }
 }
 
-static mut APP_CORE_STACK: CPUStack<8192> = CPUStack::new();
+static mut APP_CORE_STACK: CPUStack<10000> = CPUStack::new();
+
 
 #[embassy_executor::task]
 async fn motion_analysis(
