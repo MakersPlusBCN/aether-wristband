@@ -25,7 +25,8 @@ use embassy_futures::select::{select, Either, select3, Either3};
 use embassy_time::{Delay, Duration, Instant, Timer};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
-    channel::{Channel, Sender},
+    channel::{Channel, Receiver, Sender},
+    pubsub::{PubSubChannel, Publisher, Subscriber, WaitResult}
 };
 
 use esp_println::println;
@@ -265,6 +266,11 @@ async fn main(spawner: Spawner) -> ! {
         )
     );
 
+    // Message channel for task orchestration
+    static CHANNEL_MSGS: StaticCell<PubSubChannel<CriticalSectionRawMutex, SysCommands, 1, 3, 2>> = StaticCell::new();
+    let channel_evts = CHANNEL_MSGS.init(PubSubChannel::new());
+    let mut pusher_msgs = channel_evts.publisher().unwrap();
+
     // Message channel for IMU->MQTT payload passing
     static CHANNEL_SAMPLES: StaticCell<Channel<CriticalSectionRawMutex, MQTTMessage, NUM_BLOCKS>> = StaticCell::new();
     let channel_samples = CHANNEL_SAMPLES.init(Channel::new());
@@ -285,12 +291,13 @@ async fn main(spawner: Spawner) -> ! {
         &clocks,
     );
     // Offload IMU reading and motion analysis to second core
+    let msg_recv = channel_evts.subscriber().unwrap();
     let _guard = cpu_control
         .start_app_core(unsafe { &mut *addr_of_mut!(APP_CORE_STACK) }, move || {
             static EXECUTOR: StaticCell<Executor> = StaticCell::new();
             let executor = EXECUTOR.init(Executor::new());
             executor.run(|spawner| {
-                spawner.spawn(motion_analysis(i2c0, sender_samples, flag)).unwrap();
+                spawner.spawn(motion_analysis(i2c0, sender_samples, msg_recv, flag)).unwrap();
             });
         })
         .unwrap();
@@ -399,6 +406,19 @@ async fn main(spawner: Spawner) -> ! {
             log::info!("Connected to broker!");
             sender_led.send(SysStates::ConnectedBroker as u8).await;
 
+            // Remote control via MQTT
+            const CONTROL_TOPIC: &str = const_format::formatcp!("{}/cmd", FIRMWARE_CONFIG.mqtt_id);
+            if let Err(result) = client.subscribe_to_topic(CONTROL_TOPIC).await {
+                if result == ReasonCode::Success {
+                    continue 'mqtt;
+                }
+                else {
+                    log::error!("Could not subscribe because {result}")
+                }
+                Timer::after(Duration::from_millis(500)).await;
+            }
+            log::info!("Subscribed!");
+
             // Main loop: sending motion samples via 'client'
 
             // moduli to keep a healthy load for the MQTT link
@@ -407,6 +427,7 @@ async fn main(spawner: Spawner) -> ! {
             loop {
                 let futures = select3(
                     receiver_samples.receive(),
+                    client.receive_message(),
                     Timer::after(MQTT_PING_PERIOD),
                 ).await;
                 match futures {
@@ -427,6 +448,10 @@ async fn main(spawner: Spawner) -> ! {
                             }
                         }
                         println!("{:?}", String::from_utf8_lossy(&buf.payload));
+                    }
+                    Either3::Second(msg) => {
+                        if let Err(e) = process_mqtt_incoming(msg, &mut pusher_msgs).await {
+                            log::error!("Problem receiving message: {:?}", e);
                             continue 'mqtt;
                         }
                     }
@@ -490,6 +515,50 @@ async fn connection(
 #[embassy_executor::task]
 async fn net_task(stack: &'static Stack<WifiDevice<'static, WifiStaDevice>>) {
     stack.run().await
+}
+
+async fn process_mqtt_incoming<'b>(
+    message_opt: Result<(&'b str, &'b [u8]), ReasonCode>,
+    msg_sender: &mut Publisher<'static, CriticalSectionRawMutex, SysCommands, 1, 3, 2>,
+) -> Result<(), ReasonCode>{
+    match message_opt {
+        Ok((topic, raw_payload)) => {
+            match str::from_utf8(raw_payload) {
+                Ok(payload) => {
+                    log::info!("Got '{}' on '{}'", payload, topic);
+                    if let Some(cmd) = dispatch_incoming_mqtt_message(topic, payload) {
+                        msg_sender.publish(cmd).await;
+                    }
+                    else {
+                        log::warn!("Unknown topic/payload!");
+                    }
+                }
+                Err(e) => {
+                    log::error!("Invalid payload: {e}");
+                }
+            };
+            Ok(())
+        }
+        Err(err) => {
+            Err(err)
+        }
+    }
+}
+
+fn dispatch_incoming_mqtt_message(
+    topic: &str,
+    payload: &str,
+) -> Option<SysCommands> {
+    let subtopic = topic.split("/").nth(1).unwrap();
+    match subtopic {
+        "cmd" => {
+            match payload {
+                "reset" => Some(SysCommands::Restart),
+                _ => None
+            }
+        }
+        _ => None
+    }
 }
 #[embassy_executor::task]
 async fn led_driving (
