@@ -60,7 +60,12 @@ mod imu_tracker;
 use crate::config::FIRMWARE_CONFIG;
 use imu_tracker::ImuTracker;
 use analysis::Analysis;
-use control::{MessageTopics, MAX_SIZE, MQTTMessage};
+use control::{
+    SysCommands,
+    MessageTopics,
+    MAX_SIZE,
+    MQTTMessage
+};
 
 #[global_allocator]
 static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
@@ -78,94 +83,113 @@ static mut APP_CORE_STACK: CPUStack<8192> = CPUStack::new();
 
 #[embassy_executor::task]
 async fn motion_analysis(
-    i2c: I2C<'static, I2C0, Async>,
+    mut i2c: I2C<'static, I2C0, Async>,
     event_sender: Sender<'static, CriticalSectionRawMutex, MQTTMessage, NUM_BLOCKS>,
+    mut cmd_receiver: Subscriber<'static, CriticalSectionRawMutex, SysCommands, 1, 3, 2>,
     mut flag_pin: Output<'static, GpioPin<2>>
 ) {
-    // Create and await IMU object
-    let imu_configured = Icm20948::new_i2c(i2c, Delay)
-        // Configure accelerometer
-        .acc_range(AccRange::Gs8)
-        .acc_dlp(AccDlp::Hz111)
-        .acc_unit(AccUnit::Gs)
-        // Configure gyroscope
-        .gyr_range(GyrRange::Dps1000)
-        .gyr_dlp(GyrDlp::Hz120)
-        .gyr_unit(GyrUnit::Dps)
-        // Final initialization
-        .set_address(0x69);
-    let imu_result = imu_configured.initialize_9dof().await;
+    'full: loop {
+        // Create and await IMU object
+        let imu_configured = Icm20948::new_i2c(&mut i2c, Delay)
+            // Configure accelerometer
+            .acc_range(AccRange::Gs8)
+            .acc_dlp(AccDlp::Hz111)
+            .acc_unit(AccUnit::Gs)
+            // Configure gyroscope
+            .gyr_range(GyrRange::Dps1000)
+            .gyr_dlp(GyrDlp::Hz120)
+            .gyr_unit(GyrUnit::Dps)
+            // Final initialization
+            .set_address(0x69);
+        let imu_result = imu_configured.initialize_9dof().await;
 
-    // Unpack IMU result safely and print error if necessary
-    let mut imu = match imu_result {
-        Ok(imu) => imu,
-        Err(error) => {
-            match error {
-                IcmError::BusError(_)   => log::error!("IMU_READER : IMU encountered a communication bus error"),
-                IcmError::ImuSetupError => log::error!("IMU_READER : IMU encountered an error during setup"),
-                IcmError::MagSetupError => log::error!("IMU_READER : IMU encountered an error during mag setup")
-            } panic!("Could not init IMU!");
-        }
-    };
+        // Unpack IMU result safely and print error if necessary
+        let mut imu = match imu_result {
+            Ok(imu) => imu,
+            Err(error) => {
+                match error {
+                    IcmError::BusError(_)   => log::error!("IMU_READER : IMU encountered a communication bus error"),
+                    IcmError::ImuSetupError => log::error!("IMU_READER : IMU encountered an error during setup"),
+                    IcmError::MagSetupError => log::error!("IMU_READER : IMU encountered an error during mag setup")
+                } panic!("Could not init IMU!");
+            }
+        };
 
-    // Calibrate gyroscope offsets using 100 samples
-    log::info!("IMU_READER : Reading gyroscopes, keep still");
-    let _gyr_cal = imu.gyr_calibrate(100).await.is_ok();
+        // Calibrate gyroscope offsets using 100 samples
+        log::info!("Calibrating gyroscopes, keep still...");
+        let _gyr_cal = imu.gyr_calibrate(250).await.is_ok();
+        log::info!("... done calibrating gyros.");
 
-    // Setup motion analysis
-    const IMU_SAMPLE_PERIOD: Duration = Duration::from_hz(200);
+        // Setup motion analysis
+        const IMU_SAMPLE_PERIOD: Duration = Duration::from_hz(200);
 
-    let acc_misalignment = FusionMatrix::identity();
-    let acc_offset = FusionVector::zero();
-    let acc_sensitivity = FusionVector::ones();
-    let gyr_offset = FusionVector::zero();
-    let mut tracker = ImuTracker::new(IMU_SAMPLE_PERIOD, Instant::now(), 1000.0f32,
-                                      acc_misalignment, acc_sensitivity, acc_offset, gyr_offset);
-    //let mut analysis = Analysis::default();
-    const DIAGONAL_BAND_DEG: f32 = 25.0;
-    let mut analysis = Analysis::new(60, 30, 0.12,
-                                               DIAGONAL_BAND_DEG*PI/180.0,
-                                               (90.0 - DIAGONAL_BAND_DEG)*PI/180.0);
-    // Main loop: reading the sensor and sending movement detection data to the broker
+        let acc_misalignment = FusionMatrix::identity();
+        let acc_offset = FusionVector::zero();
+        let acc_sensitivity = FusionVector::ones();
+        let gyr_offset = FusionVector::zero();
+        let mut tracker = ImuTracker::new(IMU_SAMPLE_PERIOD, Instant::now(), 1000.0f32,
+                                        acc_misalignment, acc_sensitivity, acc_offset, gyr_offset);
+        //let mut analysis = Analysis::default();
+        const DIAGONAL_BAND_DEG: f32 = 25.0;
+        let mut analysis = Analysis::new(60, 30, 0.12,
+                                                DIAGONAL_BAND_DEG*PI/180.0,
+                                                (90.0 - DIAGONAL_BAND_DEG)*PI/180.0);
+        // Main loop: reading the sensor and sending movement detection data to the broker
 
-    // modulus to send motion direction samples at a low rate
-    const DETECTION_REPORT_FREQ: Duration = Duration::from_hz(8);
-    const MOD_DETECTION: u32 = (DETECTION_REPORT_FREQ.as_ticks() / IMU_SAMPLE_PERIOD.as_ticks()) as u32;
+        // modulus to send motion direction samples at a low rate
+        const DETECTION_REPORT_FREQ: Duration = Duration::from_hz(8);
+        const MOD_DETECTION: u32 = (DETECTION_REPORT_FREQ.as_ticks() / IMU_SAMPLE_PERIOD.as_ticks()) as u32;
 
-    let mut ticker = Ticker::every(IMU_SAMPLE_PERIOD);
-    let mut id: u32 = 0;
-    'sample: loop {
-        ticker.next().await;
-        id += 1;
-        let should_send_sample = id % MOD_DETECTION == 0;
+        let mut id: u32 = 0;
+        'sample: loop {
 
-        let now = Instant::now();
-        flag_pin.set_high();
-        match imu.read_9dof().await {
-            Ok(meas) => {
-                let acc = FusionVector::new(meas.acc.x, meas.acc.y, meas.acc.z);
-                let gyr = FusionVector::new(meas.gyr.x, meas.gyr.y, meas.gyr.z);
+            let futures = select(
+                Timer::after(IMU_SAMPLE_PERIOD),
+                cmd_receiver.next_message()
+            ).await;
+            match futures {
+                Either::First(_) => {
+                    id += 1;
+                    let should_send_sample = id % MOD_DETECTION == 0;
 
-                // Magnetometer axes are reflected along X axis, as per the datasheet
-                let mag = FusionVector::new(meas.mag.x, -meas.mag.y, -meas.mag.z);
+                    let now = Instant::now();
+                    flag_pin.set_high();
+                    match imu.read_9dof().await {
+                        Ok(meas) => {
+                            let acc = FusionVector::new(meas.acc.x, meas.acc.y, meas.acc.z);
+                            let gyr = FusionVector::new(meas.gyr.x, meas.gyr.y, meas.gyr.z);
 
-                tracker.update(now, acc, gyr, mag);
-                let new_direction = analysis.add_measurement(tracker.linear_accel);
-                flag_pin.set_low();
-                if should_send_sample {
-                    if let Some(dir) = new_direction {
-                        let value: u8 = 0x30 + dir.as_digit();
-                        //let mark = (id % 100) as u8;
-                        //let payload: SampleBuffer = [mark, value];
-                        let payload: ChannelBuffer = [value];
+                            // Magnetometer axes are reflected along X axis, as per the datasheet
+                            let mag = FusionVector::new(meas.mag.x, -meas.mag.y, -meas.mag.z);
 
-                        sample_sender.send(payload).await;
+                            tracker.update(now, acc, gyr, mag);
+                            let new_direction = analysis.add_measurement(tracker.linear_accel);
+                            flag_pin.set_low();
+                            if should_send_sample {
+                                if let Some(dir) = new_direction {
+                                    let value: u8 = 0x30 + dir.as_digit();
+                                    //let mark = (id % 100) as u8;
+                                    //let payload: SampleBuffer = [mark, value];
+                                    let event = MQTTMessage {
+                                        topic: MessageTopics::Event,
+                                        payload: Vec::<u8, MAX_SIZE>::from_slice(&[value]).unwrap(),
+                                    };
+                                    event_sender.send(event).await;
+                                }
+                            }
+                        },
+                        Err(e) => {
+                            log::error!("Reading IMU {e:?}");
+                            break 'sample;
+                        }
                     }
                 }
-            },
-            Err(e) => {
-                log::error!("Reading IMU {e:?}");
-                break 'sample;
+                Either::Second(received_cmd) => {
+                    if let WaitResult::Message(SysCommands::Restart) = received_cmd {
+                        log::info!("Restarting!");
+                        continue 'full;
+                    }
+                }
             }
         }
     }

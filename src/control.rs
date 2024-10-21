@@ -2,6 +2,10 @@ use heapless::Vec;
 use const_format::formatcp;
 use crate::config::FIRMWARE_CONFIG;
 
+#[derive(Clone)]
+pub enum SysCommands {
+    Restart,
+}
 pub enum MessageTopics {
     Event,
 }
