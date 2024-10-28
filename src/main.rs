@@ -223,6 +223,39 @@ async fn main(spawner: Spawner) -> ! {
     let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
     let mut rng = Rng::new(peripherals.RNG);
 
+    let systimer = esp_hal::timer::systimer::SystemTimer::new(peripherals.SYSTIMER);
+    esp_hal_embassy::init(
+        &clocks,
+        make_static!(
+            [
+             OneShotTimer::new(systimer.alarm0.into()),
+             OneShotTimer::new(systimer.alarm1.into()),
+             ]
+        )
+    );
+
+    // Message channel for task orchestration
+    static CHANNEL_MSGS: StaticCell<PubSubChannel<CriticalSectionRawMutex, SysCommands, 1, 3, 2>> = StaticCell::new();
+    let channel_evts = CHANNEL_MSGS.init(PubSubChannel::new());
+    let mut pusher_msgs = channel_evts.publisher().unwrap();
+
+    // Message channel for payload passing to MQTT pub messages
+    static CHANNEL_MQTT_PUB: StaticCell<Channel<CriticalSectionRawMutex, MQTTMessage, NUM_BLOCKS>> = StaticCell::new();
+    let channel_mqtt_pub = CHANNEL_MQTT_PUB.init(Channel::new());
+    let sender_samples = channel_mqtt_pub.sender();
+    let receiver_samples = channel_mqtt_pub.receiver();
+
+    // Power handling via GPIO pins
+    let enable_pin_out = Output::new(io.pins.gpio4, Level::High);
+    let low_batt_pin_in = Input::new(io.pins.gpio3, Pull::Down);
+    spawner.spawn(
+        power_handling(
+            channel_evts.subscriber().unwrap(),
+            channel_mqtt_pub.sender(),
+            enable_pin_out,
+            low_batt_pin_in)
+    ).ok();
+
     let mut flag = Output::new(io.pins.gpio2, Level::Low);
     flag.set_low();
 
@@ -257,28 +290,6 @@ async fn main(spawner: Spawner) -> ! {
     let (wifi_interface, controller) =
         esp_wifi::wifi::new_with_mode(&init, peripherals.WIFI, WifiStaDevice).unwrap();
 
-    let systimer = esp_hal::timer::systimer::SystemTimer::new(peripherals.SYSTIMER);
-    esp_hal_embassy::init(
-        &clocks,
-        make_static!(
-            [
-             OneShotTimer::new(systimer.alarm0.into()),
-             OneShotTimer::new(systimer.alarm1.into()),
-             ]
-        )
-    );
-
-    // Message channel for task orchestration
-    static CHANNEL_MSGS: StaticCell<PubSubChannel<CriticalSectionRawMutex, SysCommands, 1, 3, 2>> = StaticCell::new();
-    let channel_evts = CHANNEL_MSGS.init(PubSubChannel::new());
-    let mut pusher_msgs = channel_evts.publisher().unwrap();
-
-    // Message channel for IMU->MQTT payload passing
-    static CHANNEL_SAMPLES: StaticCell<Channel<CriticalSectionRawMutex, MQTTMessage, NUM_BLOCKS>> = StaticCell::new();
-    let channel_samples = CHANNEL_SAMPLES.init(Channel::new());
-    let sender_samples = channel_samples.sender();
-    let receiver_samples = channel_samples.receiver();
-
     // I2C to IMU start
     let sclk = io.pins.gpio8;
     let mosi = io.pins.gpio10;  // SDA on IMU board
@@ -302,11 +313,6 @@ async fn main(spawner: Spawner) -> ! {
             });
         })
         .unwrap();
-
-    // Power handling via GPIO pins
-    let enable_pin_out = Output::new(io.pins.gpio4, Level::High);
-    let low_batt_pin_in = Input::new(io.pins.gpio3, Pull::Down);
-    spawner.spawn(power_handling(channel_evts.subscriber().unwrap(), channel_samples.sender(), enable_pin_out, low_batt_pin_in)).ok();
 
     // Init network stack
     let mut dhcp_config: embassy_net::DhcpConfig = Default::default();
