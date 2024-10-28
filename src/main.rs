@@ -433,22 +433,9 @@ async fn main(spawner: Spawner) -> ! {
                 ).await;
                 match futures {
                     Either3::First(buf) => {
-                        let topic = buf.topic.as_str();
-                        // Receive a buffer from the channel
-                        if let Err(result) = client
-                            .send_message(
-                                topic,
-                                &buf.payload,
-                                QualityOfService::QoS0,
-                                false,
-                            )
-                            .await {
-                            if result != ReasonCode::Success {
-                                log::error!("Could not publish because {result}; Restarting connection!");
-                                // TODO bubble the error up!
-                            }
+                        if !publish_msg(&mut client, buf).await {
+                            continue 'mqtt;
                         }
-                        println!("{:?}", String::from_utf8_lossy(&buf.payload));
                     }
                     Either3::Second(msg) => {
                         if let Err(e) = process_mqtt_incoming(msg, &mut pusher_msgs).await {
@@ -469,6 +456,32 @@ async fn main(spawner: Spawner) -> ! {
             }
         }
     }
+}
+
+async fn publish_msg(
+    mqtt_client: &mut MqttClient<'_, TcpSocket<'_>, 5, CountingRng>,
+    msg: MQTTMessage
+) -> bool
+{
+    let mut succeeded = true;
+    let topic = msg.topic.as_str();
+    // Receive a buffer from the channel
+    if let Err(result) = mqtt_client
+        .send_message(
+            topic,
+            &msg.payload,
+            QualityOfService::QoS0,
+            false,
+        )
+        .await {
+        if result != ReasonCode::Success {
+            log::error!("Could not publish because {result}; Restarting connection!");
+            succeeded = false;
+        }
+    }
+    println!("{}", String::from_utf8_lossy(&msg.payload));
+
+    succeeded
 }
 
 #[embassy_executor::task]
