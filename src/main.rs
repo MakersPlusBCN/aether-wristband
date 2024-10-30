@@ -315,8 +315,8 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(connection(controller, channel_led.sender())).ok();
     spawner.spawn(net_task(stack)).ok();
 
-    let mut rx_buffer = [0; 4096];
-    let mut tx_buffer = [0; 4096];
+    let mut rx_buffer = [0; 1536];
+    let mut tx_buffer = [0; 1536];
 
     // Outer loop that maintains WiFi connectivity
     'conn: loop {
@@ -433,16 +433,39 @@ async fn main(spawner: Spawner) -> ! {
                     }
                     Either3::Second(msg) => {
                         if let Err(e) = process_mqtt_incoming(msg, &mut pusher_msgs).await {
-                            log::error!("Problem receiving message: {:?}", e);
-                            continue 'mqtt;
+                            match e {
+                                ReasonCode::Success => continue,
+                                ReasonCode::NetworkError => {
+                                    log::error!("network error during receive. ignoring...");
+                                    // Once it reaches here, it seems the network error doesn't go away...
+                                    continue 'mqtt;
+                                },
+                                _ => {
+                                    log::error!("Problem receiving message: {:?}", e);
+                                    //continue 'mqtt;
+                                    let report = MQTTMessage {
+                                        topic: MessageTopics::Report,
+                                        payload: Vec::<u8, MAX_SIZE>::from_slice(&[u8::from(e)]).unwrap(),
+                                    };
+                                    if !publish_msg(&mut client, report).await {
+                                        continue 'mqtt;
+                                    }
+                                }
+                            }
                         }
                     }
                     Either3::Third(_) => {
                         // Timeout expired: send MQTT ping!
                         if let Err(result) = client.send_ping().await {
-                            if result != ReasonCode::Success {
-                                log::error!("Could not send ping because {result}; Restarting connection!");
-                                continue 'mqtt;
+                            match result {
+                                ReasonCode::Success => continue,
+                                ReasonCode::ImplementationSpecificError => {
+                                    log::warn!("Unexpected maybe non fatal during ping!")
+                                },
+                                _ => {
+                                    log::error!("Could not send ping because {result}; Restarting connection!");
+                                    continue 'mqtt;
+                                },
                             }
                         }
                     }
