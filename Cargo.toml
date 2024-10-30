@@ -64,11 +64,14 @@ opt-level = "s"
 [profile.dev.package.esp-wifi]
 opt-level = 3
 
+[profile.dev.package.xtensa-lx-rt]
+opt-level = 'z'
+
 [profile.release]
 codegen-units = 1 # LLVM can perform better optimizations using a single thread
 debug = 2
 debug-assertions = false
 incremental = false
-lto = 'fat'
-opt-level = 's'
+#lto = 'fat'    # opt level 3 with LTO can cause issues
+opt-level = 3
 overflow-checks = false
