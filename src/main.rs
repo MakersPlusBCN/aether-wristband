@@ -7,7 +7,6 @@ use core::{mem::MaybeUninit, ptr::addr_of_mut, str::{self, FromStr}};
 use alloc::string::String;
 use esp_backtrace as _;
 use esp_hal::{
-    clock::{ClockControl, CpuClock},
     cpu_control::{CpuControl, Stack as CPUStack},
     gpio::{GpioPin, Input, Io, Level, Output, Pull},
     i2c::I2C,
@@ -15,8 +14,9 @@ use esp_hal::{
     prelude::*,
     rmt::Rmt,
     rng::Rng,
-    system::SystemControl,
-    timer::OneShotTimer,
+    timer::{
+        timg::TimerGroup, AnyTimer
+    },
     Async, Blocking,
 };
 
@@ -216,23 +216,24 @@ async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
     init_heap();
 
-    let peripherals = Peripherals::take();
-    let system = SystemControl::new(peripherals.SYSTEM);
-    let clocks = ClockControl::configure(system.clock_control, CpuClock::Clock160MHz).freeze();
+    let peripherals = esp_hal::init({
+        let mut config = esp_hal::Config::default();
+        config.cpu_clock = CpuClock::Clock240MHz;
+        config
+    });
+
+    // There should be at least as many timers for initialization
+    // as embassy executors are defined. In this case, two, one
+    // for each CPU core.
+    let timg0 = TimerGroup::new(peripherals.TIMG0);
+    let timer1: AnyTimer = timg0.timer1.into();
+    let timg1 = TimerGroup::new(peripherals.TIMG1);
+    let timer10: AnyTimer = timg1.timer0.into();
+    esp_hal_embassy::init([timer1, timer10]);
+
     let mut cpu_control = CpuControl::new(peripherals.CPU_CTRL);
     let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
     let mut rng = Rng::new(peripherals.RNG);
-
-    let systimer = esp_hal::timer::systimer::SystemTimer::new(peripherals.SYSTIMER);
-    esp_hal_embassy::init(
-        &clocks,
-        make_static!(
-            [
-             OneShotTimer::new(systimer.alarm0.into()),
-             OneShotTimer::new(systimer.alarm1.into()),
-             ]
-        )
-    );
 
     // Message channel for task orchestration
     static CHANNEL_MSGS: StaticCell<PubSubChannel<CriticalSectionRawMutex, SysCommands, 1, 3, 2>> = StaticCell::new();

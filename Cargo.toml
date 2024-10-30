@@ -6,25 +6,29 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-esp-backtrace = { version = "0.13.0", features = [
+esp-backtrace = { version = "0.14.2", features = [
     "esp32s3",
     "exception-handler",
     "panic-handler",
     "println",
 ] }
-esp-hal = { version = "0.19.0", features = [
-    "esp32s3",
-    "embassy-futures", "embassy-sync", "async",
-    "embedded-io", "embedded-io-async", "embedded-hal"
-] }
-esp-println = { version = "0.10.0", features = ["esp32s3", "log"] }
+esp-hal = { version = "0.21.1", features = ["esp32s3", "log"] }
+esp-config = "0.1.0"
+esp-println = { version = "0.12.0", features = ["esp32s3", "log"] }
 log = { version = "0.4.21" }
 esp-alloc = { version = "0.4.0", features = ["nightly"] }
 heapless = { version = "0.8.0", default-features = false }
 static_cell = { version = "2.1.0", features = ["nightly"] }
 
-esp-hal-embassy = { version = "0.2.0", features = ["esp32s3", "log", "integrated-timers"] }
-embassy-executor     = { version = "0.5.0", features = ["nightly", "executor-interrupt", "executor-thread", "integrated-timers"] }
+esp-hal-embassy = { version = "0.4.0", features = [
+    "esp32s3", "log",
+    "integrated-timers"
+] }
+embassy-executor     = { version = "0.6.1", features = [
+    "executor-interrupt", "executor-thread",
+    "integrated-timers",
+    "log", "task-arena-size-16384"
+] }
 embassy-embedded-hal = { version = "0.2.0" }
 embassy-futures      = { version = "0.1.1" }
 embassy-sync         = { version = "0.6.0" }
@@ -59,6 +63,7 @@ imu-fusion = { version = "0.2.4" }
 icm20948-async = { git = "https://github.com/peterkrull/icm20948-async" }
 micromath = { version = "2.1.0" }
 circular-buffer = { version = "0.1", default-features = false }
+xtensa-lx-rt = { version = "0.17.1", features = ["esp32s3", "float-save-restore"] }
 
 [profile.dev]
 # Rust debug is too slow.
