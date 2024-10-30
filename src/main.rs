@@ -8,9 +8,9 @@ use alloc::string::String;
 use esp_backtrace as _;
 use esp_hal::{
     cpu_control::{CpuControl, Stack as CPUStack},
-    gpio::{GpioPin, Input, Io, Level, Output, Pull},
-    i2c::I2C,
-    peripherals::{Peripherals, I2C0},
+    gpio::{AnyPin, Input, Io, Level, Output, Pull},
+    i2c::I2c,
+    peripherals::I2C0,
     prelude::*,
     rmt::Rmt,
     rng::Rng,
@@ -98,10 +98,10 @@ static mut APP_CORE_STACK: CPUStack<10000> = CPUStack::new();
 
 #[embassy_executor::task]
 async fn motion_analysis(
-    mut i2c: I2C<'static, I2C0, Async>,
+    mut i2c: I2c<'static, I2C0, Async>,
     event_sender: Sender<'static, CriticalSectionRawMutex, MQTTMessage, NUM_BLOCKS>,
     mut cmd_receiver: Subscriber<'static, CriticalSectionRawMutex, SysCommands, 1, 3, 2>,
-    mut flag_pin: Output<'static, GpioPin<2>>
+    mut flag_pin: Output<'static, AnyPin>
 ) {
     'full: loop {
         // Create and await IMU object
@@ -296,7 +296,7 @@ async fn main(spawner: Spawner) -> ! {
     let mosi = io.pins.gpio10;  // SDA on IMU board
     //let miso = io.pins.gpio7;    // SDO on IMU board
     //let cs = io.pins.gpio5;
-    let i2c0 = I2C::new_async(
+    let i2c0 = I2c::new_async(
         peripherals.I2C0,
         mosi,
         sclk,
@@ -587,8 +587,8 @@ fn dispatch_incoming_mqtt_message(
 async fn power_handling(
     mut cmd_receiver: Subscriber<'static, CriticalSectionRawMutex, SysCommands, 1, 3, 2>,
     event_sender: Sender<'static, CriticalSectionRawMutex, MQTTMessage, NUM_BLOCKS>,
-    mut enable_pin: Output<'static, GpioPin<4>>,
-    mut low_battery_pin: Input<'static, GpioPin<3>>
+    mut enable_pin: Output<'static, AnyPin>,
+    mut low_battery_pin: Input<'static, AnyPin>
 ) {
     loop {
         let futures = select(
