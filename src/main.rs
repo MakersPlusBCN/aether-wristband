@@ -250,9 +250,9 @@ async fn main(spawner: Spawner) -> ! {
 
     let led_pin = io.pins.gpio48;
     let freq = 80.MHz();
-    let rmt = Rmt::new(peripherals.RMT, freq, &clocks, None).unwrap();
+    let rmt = Rmt::new(peripherals.RMT, freq).unwrap();
     let rmt_buffer = smartLedBuffer!(1);
-    let led  = SmartLedsAdapter::new(rmt.channel0, led_pin, rmt_buffer, &clocks);
+    let led  = SmartLedsAdapter::new(rmt.channel0, led_pin, rmt_buffer);
 
     // Message channel for LED setting
     static CHANNEL_LED: StaticCell<Channel<CriticalSectionRawMutex, u8, 1>> = StaticCell::new();
