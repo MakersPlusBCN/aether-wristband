@@ -16,7 +16,7 @@ esp-hal = { version = "0.21.1", features = ["esp32s3", "log"] }
 esp-config = "0.1.0"
 esp-println = { version = "0.12.0", features = ["esp32s3", "log"] }
 log = { version = "0.4.21" }
-esp-alloc = { version = "0.4.0", features = ["nightly"] }
+esp-alloc = { version = "0.5.0", features = ["nightly"] }
 heapless = { version = "0.8.0", default-features = false }
 static_cell = { version = "2.1.0", features = ["nightly"] }
 
@@ -44,16 +44,7 @@ esp-hal-smartled = { version = "0.12.0", features = ["esp32s3"] }
 smart-leds = "0.4.0"
 
 embassy-net = { version = "0.4.0", features = ["dhcpv4", "dhcpv4-hostname", "proto-ipv4", "igmp", "tcp", "udp", "dns", "medium-ethernet", "log"] }
-esp-wifi = { version = "0.7.1", features = [
-    "esp32s3",
-    "wifi",
-    "phy-enable-usb", # This is CRITICAL in order to not break USB functions
-    #"ps-max-modem",   # These are sleep modes. If not enabled, power dissipation skyrockets!
-    "ps-min-modem",  # They are mutually exclusive. min is to sleep
-    "wifi-default",   # Brings common protocols such as tcp, udp, dns, dhcp
-    "embassy-net", "async",
-    "log",
-], default-features = false }
+esp-wifi = { version = "0.10.1", features = ["esp32s3", "wifi", "phy-enable-usb", "ps-min-modem", "wifi-default", "embassy-net", "async", "log", "xtensa-lx-rt"] }
 rust-mqtt = { version = "0.3.0", default-features = false }
 
 const_format = { version = "0.2.32" }

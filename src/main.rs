@@ -2,9 +2,13 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
-use core::{mem::MaybeUninit, ptr::addr_of_mut, str::{self, FromStr}};
+use core::{ptr::addr_of_mut, str::{self, FromStr}};
 
 use alloc::string::String;
+
+extern crate alloc;
+use esp_alloc as _;
+
 use esp_backtrace as _;
 use esp_hal::{
     cpu_control::{CpuControl, Stack as CPUStack},
@@ -33,8 +37,6 @@ use embassy_sync::{
 use esp_println::println;
 use heapless::Vec;
 use static_cell::{make_static, StaticCell};
-
-extern crate alloc;
 
 use esp_wifi::wifi::{
     AuthMethod, WifiController, WifiDevice, WifiEvent, WifiStaDevice, WifiState
@@ -80,18 +82,6 @@ use control::{
     MAX_SIZE,
     MQTTMessage
 };
-
-#[global_allocator]
-static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
-
-fn init_heap() {
-    const HEAP_SIZE: usize = 32 * 1024;
-    static mut HEAP: MaybeUninit<[u8; HEAP_SIZE]> = MaybeUninit::uninit();
-
-    unsafe {
-        ALLOCATOR.init(HEAP.as_mut_ptr() as *mut u8, HEAP_SIZE);
-    }
-}
 
 static mut APP_CORE_STACK: CPUStack<10000> = CPUStack::new();
 
@@ -214,7 +204,6 @@ async fn motion_analysis(
 #[main]
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
-    init_heap();
 
     let peripherals = esp_hal::init({
         let mut config = esp_hal::Config::default();
@@ -233,7 +222,6 @@ async fn main(spawner: Spawner) -> ! {
 
     let mut cpu_control = CpuControl::new(peripherals.CPU_CTRL);
     let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
-    let mut rng = Rng::new(peripherals.RNG);
 
     // Message channel for task orchestration
     static CHANNEL_MSGS: StaticCell<PubSubChannel<CriticalSectionRawMutex, SysCommands, 1, 3, 2>> = StaticCell::new();
@@ -274,18 +262,14 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(led_driving(led, channel_led.receiver())).ok();
 
     // WiFi PHY start
+    let mut rng = Rng::new(peripherals.RNG);
+    esp_alloc::heap_allocator!(74 * 1024);
     let seed = ((rng.random() as u64) << 32) | (rng.random() as u64);
-    let timer = esp_hal::timer::PeriodicTimer::new(
-        esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG1, &clocks, None)
-            .timer0
-            .into(),
-    );
-    let init = esp_wifi::initialize(
+    let init = esp_wifi::init(
         esp_wifi::EspWifiInitFor::Wifi,
-        timer,
+        timg0.timer0,
         rng,
         peripherals.RADIO_CLK,
-        &clocks,
     )
     .unwrap();
     let (wifi_interface, controller) =
