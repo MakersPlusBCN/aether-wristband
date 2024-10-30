@@ -36,7 +36,7 @@ use embassy_sync::{
 
 use esp_println::println;
 use heapless::Vec;
-use static_cell::{make_static, StaticCell};
+use static_cell::StaticCell;
 
 use esp_wifi::wifi::{
     AuthMethod, WifiController, WifiDevice, WifiEvent, WifiStaDevice, WifiState
@@ -285,7 +285,6 @@ async fn main(spawner: Spawner) -> ! {
         mosi,
         sclk,
         400.kHz(),
-        &clocks,
     );
     // Offload IMU reading and motion analysis to second core
     let msg_recv = channel_evts.subscriber().unwrap();
@@ -300,12 +299,16 @@ async fn main(spawner: Spawner) -> ! {
         .unwrap();
 
     // Init network stack
+    const WIFI_SOCKS: usize = 5;
+    static WIFI_STACK_RES: StaticCell<StackResources<WIFI_SOCKS>> = StaticCell::new();
+    static WIFI_STACK: StaticCell<Stack<WifiDevice<'_, WifiStaDevice>>> = StaticCell::new();
     let mut dhcp_config: embassy_net::DhcpConfig = Default::default();
     dhcp_config.hostname = Some(heapless::String::from_str(FIRMWARE_CONFIG.mqtt_id).unwrap());
-    let stack = &*make_static!(Stack::new(
+    let stack_res: &'static mut StackResources<WIFI_SOCKS> = WIFI_STACK_RES.init(StackResources::<WIFI_SOCKS>::new());
+    let stack = WIFI_STACK.init(Stack::new(
         wifi_interface,
         Config::dhcpv4(dhcp_config),
-        make_static!(StackResources::<3>::new()),
+        stack_res,
         seed
     ));
 
