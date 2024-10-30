@@ -40,7 +40,7 @@ embedded-hal-bus     = { version = "0.2.0" }
 embedded-io          = { version = "0.6.1" }
 embedded-io-async    = { version = "0.6.1" }
 
-esp-hal-smartled = { path = "./esp-hal-community/esp-hal-smartled", features = ["esp32s3"] }
+esp-hal-smartled = { git = "https://github.com/robamu/esp-hal-community.git", rev = "3562306", features = ["esp32s3"] }
 smart-leds = "0.4.0"
 
 embassy-net = { version = "0.4.0", features = ["dhcpv4", "dhcpv4-hostname", "proto-ipv4", "igmp", "tcp", "udp", "dns", "medium-ethernet", "log"] }

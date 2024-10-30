@@ -653,7 +653,8 @@ dependencies = [
 
 [[package]]
 name = "esp-hal-smartled"
-version = "0.13.0"
+version = "0.14.0"
+source = "git+https://github.com/robamu/esp-hal-community.git?rev=3562306#3562306e171dab0afae9cc28f8eb02f22e93a593"
 dependencies = [
  "document-features",
  "esp-hal",

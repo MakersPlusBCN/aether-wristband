@@ -21,7 +21,7 @@ use esp_hal::{
     timer::{
         timg::TimerGroup, AnyTimer
     },
-    Async, Blocking,
+    Async,
 };
 
 use esp_hal_embassy::Executor;
@@ -52,13 +52,12 @@ use rust_mqtt::{
 };
 
 use esp_hal_smartled::{
-    smartLedBuffer,
-    SmartLedsAdapter,
+    smart_led_buffer,
+    asynch::SmartLedAdapterAsync,
 };
 use smart_leds::{
     brightness, gamma,
     hsv::{hsv2rgb, Hsv},
-    SmartLedsWrite,
 };
 
 use icm20948_async::{AccRange, AccDlp, AccUnit, GyrDlp, GyrRange, GyrUnit, IcmError, Icm20948};
@@ -250,9 +249,9 @@ async fn main(spawner: Spawner) -> ! {
 
     let led_pin = io.pins.gpio48;
     let freq = 80.MHz();
-    let rmt = Rmt::new(peripherals.RMT, freq).unwrap();
-    let rmt_buffer = smartLedBuffer!(1);
-    let led  = SmartLedsAdapter::new(rmt.channel0, led_pin, rmt_buffer);
+    let rmt = Rmt::new_async(peripherals.RMT, freq).unwrap();
+    let rmt_buffer = smart_led_buffer!(1);
+    let led = SmartLedAdapterAsync::new(rmt.channel0, led_pin, rmt_buffer);
 
     // Message channel for LED setting
     static CHANNEL_LED: StaticCell<Channel<CriticalSectionRawMutex, u8, 1>> = StaticCell::new();
@@ -626,7 +625,7 @@ async fn power_handling(
 
 #[embassy_executor::task]
 async fn led_driving (
-    mut led: SmartLedsAdapter<esp_hal::rmt::Channel<Blocking, 0>, 25>,
+    mut led: SmartLedAdapterAsync<esp_hal::rmt::Channel<Async, 0>, 25>,
     cmd_receiver: Receiver<'static, CriticalSectionRawMutex, u8, 1>,
 )
 {
@@ -646,7 +645,7 @@ async fn led_driving (
         // When sending to the LED, we do a gamma correction first (see smart_leds
         // documentation for details) and then limit the brightness to 10 out of 255 so
         // that the output it's not too bright.
-        if let Err(e) = led.write(brightness(gamma(data.iter().cloned()), 20)) {
+        if let Err(e) = led.write(brightness(gamma(data.iter().cloned()), 20)).await {
             log::error!("Driving LED: {:?}", e);
         }
     }
